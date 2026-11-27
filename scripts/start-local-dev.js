@@ -113,21 +113,56 @@ async function askSecret(prompt) {
 
 async function startPostgresServiceIfStopped() {
   if (process.platform !== "win32") return;
+  const loopbackHosts = ["127.0.0.1", "localhost", "::1", "[::1]"];
+  const databaseUrl = [process.env.MIGRATION_DATABASE_URL, process.env.DATABASE_URL]
+    .find((value) => {
+      if (!value) return false;
+      try {
+        return loopbackHosts.includes(new URL(value).hostname);
+      } catch {
+        return false;
+      }
+    });
+  if (!databaseUrl) return;
+
+  const databasePort = Number(new URL(databaseUrl).port || 5432);
+  if (!Number.isInteger(databasePort) || databasePort < 1 || databasePort > 65535) {
+    throw new Error("The local PostgreSQL URL has an invalid port.");
+  }
+
   const command = [
-    "$services = @(Get-Service -Name 'postgresql*' -ErrorAction SilentlyContinue)",
-    "if ($services.Count -eq 0) { Write-Error 'No PostgreSQL Windows service was found.'; exit 2 }",
-    "$running = @($services | Where-Object { $_.Status -eq 'Running' })",
-    "if ($running.Count -gt 0) { Write-Output ('PostgreSQL service is running: ' + $running[0].Name); exit 0 }",
-    "if ($services.Count -gt 1) { Write-Error 'Multiple stopped PostgreSQL services found; start the intended one manually.'; exit 3 }",
-    "Start-Service -Name $services[0].Name -ErrorAction Stop",
-    "Write-Output ('Started PostgreSQL service: ' + $services[0].Name)",
+    `$port = ${databasePort}`,
+    "$services = @(Get-CimInstance Win32_Service -Filter \"Name like 'postgresql%'\" -ErrorAction SilentlyContinue)",
+    "if ($services.Count -eq 0) { Write-Error 'No PostgreSQL Windows service was found. On a new PC, run npm run setup first.'; exit 2 }",
+    "$matching = @()",
+    "foreach ($service in $services) {",
+    "  if ($service.PathName -match '-D\\s+\"([^\"]+)\"') {",
+    "    $configPath = Join-Path $Matches[1] 'postgresql.conf'",
+    "  } else { continue }",
+    "  $configuredPort = 5432",
+    "  if (Test-Path $configPath) {",
+    "    $portLine = Select-String -Path $configPath -Pattern '^\\s*port\\s*=\\s*(\\d+)' | Select-Object -First 1",
+    "    if ($portLine) { $configuredPort = [int]$portLine.Matches[0].Groups[1].Value }",
+    "  }",
+    "  if ($configuredPort -eq $port) { $matching += $service }",
+    "}",
+    "if ($matching.Count -eq 0) { Write-Error \"No PostgreSQL service is configured for port $port. Run npm run setup or check the database port in .env.\"; exit 3 }",
+    "$running = @($matching | Where-Object { $_.State -eq 'Running' })",
+    "if ($running.Count -eq 1) { Write-Output ('PostgreSQL service is running: ' + $running[0].Name); exit 0 }",
+    "if ($running.Count -gt 1 -or $matching.Count -gt 1) { Write-Error \"Multiple PostgreSQL services match port $port. Configure only one service for this port.\"; exit 4 }",
+    "try { Start-Service -Name $matching[0].Name -ErrorAction Stop } catch { Write-Error \"Could not start $($matching[0].Name): $($_.Exception.Message)\"; exit 5 }",
+    "Write-Output ('Started PostgreSQL service: ' + $matching[0].Name)",
   ].join("; ");
   const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", command], {
     encoding: "utf8",
     windowsHide: true,
   });
+  if (result.error) {
+    throw new Error(`Could not check PostgreSQL service on port ${databasePort}: ${result.error.message}`);
+  }
   if (result.status !== 0) {
-    throw new Error("Could not start PostgreSQL. Start its Windows service manually (or run this terminal with permission), then retry.");
+    const detail = [result.stderr, result.stdout].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    throw new Error(detail || `Could not start PostgreSQL service on port ${databasePort}. Run npm run setup or start the matching service manually.`);
   }
   process.stdout.write(result.stdout);
 }
