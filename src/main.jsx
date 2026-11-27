@@ -11,8 +11,10 @@ import {
   Check,
   ChevronDown,
   CircleHelp,
+  Clock3,
   File,
   FileText,
+  Folder,
   FolderKanban,
   Info,
   LayoutDashboard,
@@ -21,6 +23,7 @@ import {
   Pencil,
   Plus,
   Search,
+  Settings,
   ShieldCheck,
   Trash2,
   Upload,
@@ -204,6 +207,10 @@ function ReportAttachments({ report, onDownload }) {
   const previewFile = files[previewIndex];
 
   return <div className="report-attachments">
+    <div className="report-package-action">
+      <div><strong>Report package</strong><small>PDF summary and all evidence files in one ZIP</small></div>
+      <button type="button" className="button button-secondary" aria-label={`Download PDF and evidence ZIP for ${report.title}`} onClick={() => onDownload(report)}><ArrowDownToLine size={15} /> Download</button>
+    </div>
     <div className="report-attachment-list">
       {files.map((file, index) => <div className="report-attachment-row" key={file.id || `${file.fileName}-${index}`}>
         <span className="file-icon"><FileText size={17} /></span>
@@ -321,11 +328,12 @@ function App() {
   if (!user) {
     return <Login onLogin={(account) => { setUser(account); setAuthMessage(""); }} serviceMessage={authMessage} />;
   }
-  return <Workspace user={user} onLogout={signOut} />;
+  return <Workspace user={user} onLogout={signOut} onUserUpdated={(updatedUser) => setUser((current) => ({ ...current, ...updatedUser }))} />;
 }
 
-function Workspace({ user, onLogout }) {
+function Workspace({ user, onLogout, onUserUpdated }) {
   const [activePage, setActivePage] = useState("Overview");
+  const [clockNow, setClockNow] = useState(() => new Date());
   const [projects, setProjects] = useState([]);
   const [manpower, setManpower] = useState([]);
   const [manpowerSearch, setManpowerSearch] = useState("");
@@ -336,7 +344,8 @@ function Workspace({ user, onLogout }) {
   const [summaryPopover, setSummaryPopover] = useState(null);
   const [projectFilter, setProjectFilter] = useState("all");
   const [search, setSearch] = useState("");
-  const [dateFilter, setDateFilter] = useState("");
+  const [dateFromFilter, setDateFromFilter] = useState("");
+  const [dateToFilter, setDateToFilter] = useState("");
   const [reports, setReports] = useState([]);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
@@ -354,6 +363,9 @@ function Workspace({ user, onLogout }) {
   const [notice, setNotice] = useState("");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [profileForm, setProfileForm] = useState({ displayName: user.name, currentPassword: "", newPassword: "", confirmPassword: "" });
+  const [profileError, setProfileError] = useState("");
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [form, setForm] = useState({ projectId: "", date: today, title: "", description: "" });
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [previewingUploadFile, setPreviewingUploadFile] = useState(null);
@@ -362,11 +374,25 @@ function Workspace({ user, onLogout }) {
   const cameraInput = useRef(null);
   const profileMenuRef = useRef(null);
   const currentUser = user.name;
+  const greetingName = currentUser.trim().split(/\s+/)[0];
+  const currentHour = clockNow.getHours();
+  const timeGreeting = currentHour >= 5 && currentHour < 12
+    ? "Good morning"
+    : currentHour >= 12 && currentHour < 17
+      ? "Good afternoon"
+      : "Good evening";
+  const clockTime = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(clockNow);
+  const clockDate = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(clockNow);
   const userInitials = currentUser.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
   const isAdministrator = user.role === "admin";
   const projectColors = ["blue", "orange", "green", "purple"];
   const projectOptions = [{ id: "all", name: "All projects" }, ...projects];
   const isSigningOut = useRef(false);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setClockNow(new Date()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const requestLogout = useCallback(() => {
     if (isSigningOut.current) return;
@@ -432,12 +458,24 @@ function Workspace({ user, onLogout }) {
     };
   }, []);
 
-  const filteredReports = useMemo(() => reports.filter((report) => {
-    const projectMatches = projectFilter === "all" || report.projectId === projectFilter;
+  const hasInvalidDateRange = Boolean(dateFromFilter && dateToFilter && dateFromFilter > dateToFilter);
+  const matchingReports = useMemo(() => reports.filter((report) => {
     const fileNames = report.files?.map((file) => file.fileName).join(" ") || report.fileName;
-    const text = `${report.title} ${report.description} ${report.user} ${fileNames}`.toLowerCase();
-    return projectMatches && (!search || text.includes(search.toLowerCase())) && (!dateFilter || report.date === dateFilter);
-  }), [reports, projectFilter, search, dateFilter]);
+    const text = `${report.title} ${report.description} ${report.user} ${report.projectName || ""} ${fileNames}`.toLowerCase();
+    const searchMatches = !search.trim() || text.includes(search.trim().toLowerCase());
+    const dateMatches = !hasInvalidDateRange
+      && (!dateFromFilter || report.date >= dateFromFilter)
+      && (!dateToFilter || report.date <= dateToFilter);
+    return searchMatches && dateMatches;
+  }), [reports, search, dateFromFilter, dateToFilter, hasInvalidDateRange]);
+  const filteredReports = useMemo(() => matchingReports.filter((report) =>
+    projectFilter === "all" || report.projectId === projectFilter,
+  ), [matchingReports, projectFilter]);
+  const projectReportCounts = useMemo(() => {
+    const counts = new Map(projects.map((project) => [project.id, 0]));
+    matchingReports.forEach((report) => counts.set(report.projectId, (counts.get(report.projectId) || 0) + 1));
+    return counts;
+  }, [projects, matchingReports]);
 
   const filteredManpower = useMemo(() => manpower.filter((person) =>
     `${person.punchId} ${person.name} ${person.designation}`.toLowerCase().includes(manpowerSearch.trim().toLowerCase()),
@@ -451,6 +489,35 @@ function Workspace({ user, onLogout }) {
     if (fileInput.current) fileInput.current.value = "";
     if (cameraInput.current) cameraInput.current.value = "";
     setIsUploadOpen(true);
+  };
+
+  const submitProfileSettings = async (event) => {
+    event.preventDefault();
+    setProfileError("");
+    if (profileForm.newPassword !== profileForm.confirmPassword && (profileForm.newPassword || profileForm.confirmPassword)) {
+      setProfileError("New password and confirmation do not match.");
+      return;
+    }
+
+    setIsSavingProfile(true);
+    try {
+      const result = await apiRequest("/api/auth/profile", {
+        method: "PATCH",
+        body: {
+          displayName: profileForm.displayName,
+          currentPassword: profileForm.currentPassword,
+          newPassword: profileForm.newPassword,
+        },
+      });
+      onUserUpdated({ name: result.user.name });
+      setProfileForm({ displayName: result.user.name, currentPassword: "", newPassword: "", confirmPassword: "" });
+      setNotice("Administrator account updated.");
+      window.setTimeout(() => setNotice(""), 5000);
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : "Unable to update administrator account.");
+    } finally {
+      setIsSavingProfile(false);
+    }
   };
 
   const addSelectedFiles = (fileList) => {
@@ -647,12 +714,16 @@ function Workspace({ user, onLogout }) {
     window.setTimeout(() => setNotice(""), 5000);
   };
 
-  const downloadReport = (report, attachment = report.files?.[0] || report) => {
+  const downloadReport = (report, attachment = null) => {
     const link = document.createElement("a");
-    link.href = attachment.id
-      ? `/api/reports/${encodeURIComponent(report.id)}/files/${encodeURIComponent(attachment.id)}`
-      : `/api/reports/${encodeURIComponent(report.id)}/file`;
-    link.download = attachment.fileName || report.fileName;
+    if (attachment) {
+      link.href = attachment.id
+        ? `/api/reports/${encodeURIComponent(report.id)}/files/${encodeURIComponent(attachment.id)}`
+        : `/api/reports/${encodeURIComponent(report.id)}/file`;
+      link.download = attachment.fileName || report.fileName;
+    } else {
+      link.href = `/api/reports/${encodeURIComponent(report.id)}/download`;
+    }
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -691,8 +762,19 @@ function Workspace({ user, onLogout }) {
   const navigate = (page) => {
     if (page === "Manpower" && !isAdministrator) return;
     if ((page === "Reports" || page === "Projects") && !isAdministrator) return;
+    if (page === "Settings" && !isAdministrator) return;
+    if (page === "Settings") {
+      if (activePage !== "Settings") {
+        setProfileForm({ displayName: currentUser, currentPassword: "", newPassword: "", confirmPassword: "" });
+        setProfileError("");
+      }
+    } else if (activePage === "Settings") {
+      setProfileForm({ displayName: currentUser, currentPassword: "", newPassword: "", confirmPassword: "" });
+      setProfileError("");
+    }
     setActivePage(page);
     setMobileNavOpen(false);
+    setIsProfileMenuOpen(false);
     if (page === "Projects") setProjectFilter("all");
   };
 
@@ -701,7 +783,8 @@ function Workspace({ user, onLogout }) {
     if (isAdministrator) setActivePage("Reports");
     setProjectFilter(summaryPopover.kind === "project" ? summaryPopover.projectId : "all");
     setSearch("");
-    setDateFilter(summaryPopover.kind === "today" ? today : "");
+    setDateFromFilter(summaryPopover.kind === "today" ? today : "");
+    setDateToFilter(summaryPopover.kind === "today" ? today : "");
     setSummaryPopover(null);
     window.requestAnimationFrame(() => {
       const reportLog = document.getElementById("report-log");
@@ -740,6 +823,7 @@ function Workspace({ user, onLogout }) {
             <button className={`nav-item ${activePage === "Projects" ? "nav-active" : ""}`} onClick={() => navigate("Projects")}><FolderKanban size={18} /><span>Projects</span></button>
           </>}
           {isAdministrator && <button className={`nav-item ${activePage === "Manpower" ? "nav-active" : ""}`} onClick={() => navigate("Manpower")}><UsersRound size={18} /><span>Manpower</span><span className="nav-count">{manpower.length}</span></button>}
+          {isAdministrator && <button className={`nav-item ${activePage === "Settings" ? "nav-active" : ""}`} onClick={() => navigate("Settings")}><Settings size={18} /><span>Settings</span></button>}
         </nav>
 
         {isAdministrator && <>
@@ -783,6 +867,7 @@ function Workspace({ user, onLogout }) {
               </button>
               {isProfileMenuOpen && <div className="top-profile-dropdown" role="dialog" aria-label="Account options">
                 <div className="top-profile-summary"><strong>{currentUser}</strong><small>{isAdministrator ? "Administrator" : `Punch ID ${user.punchId}`}</small></div>
+                {isAdministrator && <button className="top-profile-action" type="button" onClick={() => navigate("Settings")}><Settings size={16} /> Account settings</button>}
                 <button className="top-profile-logout" type="button" onClick={requestLogout}><LogOut size={16} /> Sign out</button>
               </div>}
             </div>
@@ -795,6 +880,18 @@ function Workspace({ user, onLogout }) {
             <div className="auth-loading" role="status">Loading workspace data…</div>
           ) : activePage === "Manpower" && isAdministrator ? (
             <ManpowerPage people={filteredManpower} total={manpower.length} query={manpowerSearch} onSearch={setManpowerSearch} onAdd={() => openManpowerForm()} onEdit={openManpowerForm} onToggleActive={toggleManpowerActive} onViewReports={openEmployeeReportLog} />
+          ) : activePage === "Settings" && isAdministrator ? (
+            <AdminSettingsPage
+              profileForm={profileForm}
+              setProfileForm={setProfileForm}
+              profileError={profileError}
+              isSaving={isSavingProfile}
+              onSubmit={submitProfileSettings}
+              onReset={() => {
+                setProfileForm({ displayName: currentUser, currentPassword: "", newPassword: "", confirmPassword: "" });
+                setProfileError("");
+              }}
+            />
           ) : activePage === "Projects" ? (
             <ProjectsPage
               projects={projectsWithReports}
@@ -810,13 +907,41 @@ function Workspace({ user, onLogout }) {
               <section className="page-heading">
                 <div>
                   <div className="eyebrow"><span className="eyebrow-dot" /> PROJECT REPORTS</div>
-                  <h1>{!isAdministrator ? "My report log" : activePage === "Overview" ? `Good morning, ${currentUser.split(/\s+/)[0]}` : "Reports"}</h1>
+                  {isAdministrator && activePage === "Overview" ? <div className="overview-heading-title">
+                    <h1>{timeGreeting}, {greetingName}</h1>
+                    <span className="overview-clock"><Clock3 size={15} /><time dateTime={clockNow.toISOString()}>{clockTime}<span> · {clockDate}</span></time></span>
+                  </div> : <h1>{!isAdministrator ? "My report log" : activePage === "Overview" ? `Good morning, ${greetingName}` : "Reports"}</h1>}
                   <p>{!isAdministrator ? "Review your submitted reports, organized by report date." : activePage === "Overview" ? "A clear view of updates across all your projects." : "Browse, filter, and download reports shared by your team."}</p>
                 </div>
                 <button className="button button-primary" onClick={openUpload}><Upload size={17} /> Upload report</button>
               </section>
 
               {activePage === "Overview" && <SummaryCards reports={reports} projects={projectsWithReports} onSelect={(kind) => setSummaryPopover({ kind })} />}
+
+              {activePage === "Reports" && isAdministrator && <section className="project-report-folder-section" aria-labelledby="project-report-folders-title">
+                <div className="section-heading">
+                  <div>
+                    <h2 id="project-report-folders-title">Project folders</h2>
+                    <p>Select a project folder to view its reports</p>
+                  </div>
+                  {projectFilter !== "all" && <button className="text-button" type="button" onClick={() => setProjectFilter("all")}>All project reports <ArrowUpRight size={15} /></button>}
+                </div>
+                {projectsWithReports.length ? <div className="project-report-folders">
+                  {projectsWithReports.map((project) => (
+                    <button
+                      className={`project-report-folder ${projectFilter === project.id ? "project-report-folder-active" : ""}`}
+                      key={project.id}
+                      type="button"
+                      aria-pressed={projectFilter === project.id}
+                      aria-label={`${project.name}, ${projectReportCounts.get(project.id) || 0} reports`}
+                      onClick={() => setProjectFilter(project.id)}
+                    >
+                      <span className={`project-report-folder-icon card-${project.color}`}><Folder size={19} /></span>
+                      <span className="project-report-folder-copy"><strong>{project.name}</strong><small>{projectReportCounts.get(project.id) || 0} reports</small></span>
+                    </button>
+                  ))}
+                </div> : <p className="project-report-folders-empty">Create a project to start organizing reports into folders.</p>}
+              </section>}
 
               <section className="report-section" id="report-log">
                 <div className="section-heading">
@@ -830,29 +955,45 @@ function Workspace({ user, onLogout }) {
                 <div className="filters">
                   <label className="search-field"><Search size={17} /><input aria-label="Search reports" placeholder="Search reports..." value={search} onChange={(event) => setSearch(event.target.value)} /><kbd>⌘ K</kbd></label>
                   <label className="select-field"><BriefcaseBusiness size={16} /><select aria-label="Filter by project" value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>{projectOptions.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><ChevronDown size={15} /></label>
-                  <label className="date-filter"><CalendarDays size={16} /><input aria-label="Filter by date" type="date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} />{dateFilter && <button aria-label="Clear date filter" onClick={() => setDateFilter("")}><X size={14} /></button>}</label>
+                  <label className="date-filter"><CalendarDays size={16} /><span>From</span><input aria-label="Filter reports from date" type="date" value={dateFromFilter} aria-invalid={hasInvalidDateRange} onChange={(event) => setDateFromFilter(event.target.value)} />{dateFromFilter && <button type="button" aria-label="Clear start date" onClick={() => setDateFromFilter("")}><X size={14} /></button>}</label>
+                  <label className="date-filter"><CalendarDays size={16} /><span>To</span><input aria-label="Filter reports to date" type="date" value={dateToFilter} aria-invalid={hasInvalidDateRange} onChange={(event) => setDateToFilter(event.target.value)} />{dateToFilter && <button type="button" aria-label="Clear end date" onClick={() => setDateToFilter("")}><X size={14} /></button>}</label>
+                  {hasInvalidDateRange && <p className="filter-validation" role="alert">Start date must be on or before end date.</p>}
                 </div>
 
-                <div className="table-wrap">
+                <div className="mobile-report-cards">
+                  {filteredReports.map((report) => <MobileReportCard
+                    key={report.id}
+                    report={report}
+                    project={projects.find((item) => item.id === report.projectId)}
+                    isAdministrator={isAdministrator}
+                    onOpen={() => setSelectedReport(report)}
+                    onDownload={downloadReport}
+                    onArchive={archiveReport}
+                  />)}
+                  {filteredReports.length === 0 && <div className="mobile-report-empty"><FileText size={22} /><strong>{isAdministrator ? "No reports found" : "Your report log is empty"}</strong><span>{isAdministrator ? "Try changing your filters or upload a new report." : "Once you submit a report, it will appear here by date."}</span><button className="button button-secondary" onClick={openUpload}><Plus size={16} /> Upload a report</button></div>}
+                </div>
+
+                <div className="table-wrap desktop-report-table">
                   <table className="report-history-table">
-                    <thead><tr><th>REPORT</th><th>PROJECT</th>{isAdministrator && <th>UPLOADED BY</th>}<th>DATE</th><th>FILE</th><th><span className="sr-only">Actions</span></th></tr></thead>
+                    <thead><tr><th>TITLE</th><th>DESCRIPTION</th><th>PROJECT</th>{isAdministrator && <th>UPLOADED BY</th>}<th>DATE</th><th>FILE</th><th><span className="sr-only">Actions</span></th></tr></thead>
                     <tbody>
                       {filteredReports.map((report) => {
                         const project = projects.find((item) => item.id === report.projectId);
                         return <tr key={report.id}>
-                          <td className="report-cell"><span className="file-icon"><FileText size={18} /></span><button className="report-copy report-open" onClick={() => setSelectedReport(report)} aria-label={`View details for ${report.title}`}><strong>{report.title}</strong><small>{report.description || "View report details"}</small></button></td>
+                          <td className="report-cell" data-label="Title"><span className="file-icon"><FileText size={18} /></span><button className="report-copy report-open" onClick={() => setSelectedReport(report)} aria-label={`View details for ${report.title}`}><strong>{report.title}</strong></button></td>
+                          <td className="report-description-cell" data-label="Description"><span>{report.description || "—"}</span></td>
                           <td data-label="Project"><span className={`project-tag tag-${project?.color}`}>{project?.shortName}</span></td>
                           {isAdministrator && <td data-label="Uploaded by"><span className="uploader"><span className="mini-avatar">{report.user.split(" ").map((part) => part[0]).join("")}</span>{report.user}</span></td>}
                           <td className="date-cell" data-label="Date">{formatDate(report.date)}</td>
                           <td data-label="Files"><span className="file-meta"><span>{report.files?.length > 1 ? `${report.files.length} files` : report.type}</span>{report.files?.length > 1 ? "Multiple" : report.fileSize}</span></td>
                           <td className="report-action-cell"><div className="report-actions">
                             <button className="download-button" aria-label={`Details for ${report.title}`} title="Report details" onClick={() => setSelectedReport(report)}><Info size={16} /></button>
-                            <button className="download-button" aria-label={`Download ${report.fileName}`} title="Download file" onClick={() => downloadReport(report)}><ArrowDownToLine size={17} /></button>
+                            <button className="download-button" aria-label={`Download PDF and evidence ZIP for ${report.title}`} title="Download PDF and evidence ZIP" onClick={() => downloadReport(report)}><ArrowDownToLine size={17} /></button>
                             {isAdministrator && <button className="download-button" aria-label={`Archive ${report.title}`} title="Archive report" onClick={() => archiveReport(report)}><Archive size={16} /></button>}
                           </div></td>
                         </tr>;
                       })}
-                      {filteredReports.length === 0 && <tr><td className="empty-state" colSpan={isAdministrator ? 6 : 5}><span className="empty-icon"><File size={20} /></span><strong>{isAdministrator ? "No reports found" : "Your report log is empty"}</strong><span>{isAdministrator ? "Try changing your filters or upload a new report." : "Once you submit a report, it will appear here by date."}</span><button className="button button-secondary" onClick={openUpload}><Plus size={16} /> Upload a report</button></td></tr>}
+                      {filteredReports.length === 0 && <tr><td className="empty-state" colSpan={isAdministrator ? 7 : 6}><span className="empty-icon"><File size={20} /></span><strong>{isAdministrator ? "No reports found" : "Your report log is empty"}</strong><span>{isAdministrator ? "Try changing your filters or upload a new report." : "Once you submit a report, it will appear here by date."}</span><button className="button button-secondary" onClick={openUpload}><Plus size={16} /> Upload a report</button></td></tr>}
                     </tbody>
                   </table>
                 </div>
@@ -1069,6 +1210,37 @@ function Workspace({ user, onLogout }) {
   );
 }
 
+function MobileReportCard({ report, project, isAdministrator, onOpen, onDownload, onArchive }) {
+  const attachments = report.files?.length ? report.files : [report];
+
+  return <article className="mobile-report-card">
+    <div className="mobile-report-card-heading">
+      <div className="mobile-report-card-title">
+        <h3>{report.title}</h3>
+        <span className={`project-tag tag-${project?.color}`}>{project?.name || report.projectName || "Project"}</span>
+      </div>
+      <time dateTime={report.date}>{formatDate(report.date)}</time>
+    </div>
+    <p className="mobile-report-description">{report.description || "No description provided."}</p>
+    {isAdministrator && <p className="mobile-report-uploader"><span>Uploaded by</span><strong>{report.user}</strong></p>}
+    <section className="mobile-report-attachments" aria-label="Report attachments">
+      <div className="mobile-report-attachments-heading"><strong>Attachments</strong><span>{attachments.length} {attachments.length === 1 ? "file" : "files"}</span></div>
+      <div className="mobile-report-attachment-list">
+        {attachments.map((attachment, index) => <div className="mobile-report-attachment" key={attachment.id || `${attachment.fileName}-${index}`}>
+          <span className="mobile-report-attachment-type">{attachment.type || "FILE"}</span>
+          <span className="mobile-report-attachment-copy"><strong>{attachment.fileName}</strong><small>{attachment.fileSize || report.fileSize}</small></span>
+          <button type="button" className="mobile-attachment-download" onClick={() => onDownload(report, attachment)} aria-label={`Download ${attachment.fileName}`}><ArrowDownToLine size={15} /> Download</button>
+        </div>)}
+      </div>
+    </section>
+    <div className="mobile-report-card-actions">
+      <button type="button" className="button button-secondary" onClick={onOpen}><Info size={15} /> Details</button>
+      <button type="button" className="button button-primary" title="ZIP contains report.pdf and all evidence attachments" aria-label={`Download PDF and evidence ZIP for ${report.title}`} onClick={() => onDownload(report)}><ArrowDownToLine size={15} /> PDF + evidence ZIP</button>
+      {isAdministrator && <button type="button" className="download-button" onClick={() => onArchive(report)} aria-label={`Archive ${report.title}`} title="Archive report"><Archive size={16} /></button>}
+    </div>
+  </article>;
+}
+
 function SummaryCards({ reports, projects, onSelect }) {
   const todayReports = reports.filter((report) => report.date === today).length;
   return <section className="summary-grid" aria-label="Workspace summary">
@@ -1081,6 +1253,43 @@ function SummaryCards({ reports, projects, onSelect }) {
     <button type="button" className="summary-card summary-card-clickable" onClick={() => onSelect("today")} aria-label={`View ${todayReports} reports dated today`}>
       <span className="summary-icon summary-purple"><CalendarDays size={18} /></span><span className="summary-copy"><small>Added today</small><strong>{todayReports}</strong><em>New project updates</em></span><span className="summary-trend">View today <ArrowUpRight size={15} /></span>
     </button>
+  </section>;
+}
+
+function AdminSettingsPage({ profileForm, setProfileForm, profileError, isSaving, onSubmit, onReset }) {
+  return <section className="admin-settings-page">
+    <div className="page-heading">
+      <div>
+        <div className="eyebrow"><span className="eyebrow-dot" /> ADMINISTRATION</div>
+        <h1>Settings</h1>
+        <p>Manage your administrator display name and sign-in password.</p>
+      </div>
+    </div>
+    <section className="report-section admin-settings-card" aria-labelledby="admin-account-settings-title">
+      <div className="section-heading">
+        <div><h2 id="admin-account-settings-title">Administrator account</h2><p>Confirm your current password before saving changes.</p></div>
+      </div>
+      <form className="admin-settings-form" onSubmit={onSubmit}>
+        <label className="form-label">Display name <span className="required">*</span>
+          <input autoFocus required minLength="2" maxLength="160" value={profileForm.displayName} onChange={(event) => setProfileForm({ ...profileForm, displayName: event.target.value })} />
+        </label>
+        <label className="form-label">Current password <span className="required">*</span>
+          <input type="password" autoComplete="current-password" required value={profileForm.currentPassword} onChange={(event) => setProfileForm({ ...profileForm, currentPassword: event.target.value })} />
+        </label>
+        <label className="form-label">New password <span className="optional">(optional, at least 12 characters)</span>
+          <input type="password" autoComplete="new-password" minLength="12" maxLength="72" value={profileForm.newPassword} onChange={(event) => setProfileForm({ ...profileForm, newPassword: event.target.value })} />
+        </label>
+        <label className="form-label">Confirm new password
+          <input type="password" autoComplete="new-password" minLength="12" maxLength="72" value={profileForm.confirmPassword} onChange={(event) => setProfileForm({ ...profileForm, confirmPassword: event.target.value })} />
+        </label>
+        {profileError && <p className="field-error" role="alert">{profileError}</p>}
+        <p className="admin-settings-security-note"><ShieldCheck size={16} /> Other signed-in sessions are revoked when you change your password.</p>
+        <div className="admin-settings-actions">
+          <button type="button" className="button button-secondary" disabled={isSaving} onClick={onReset}>Reset changes</button>
+          <button type="submit" className="button button-primary" disabled={isSaving}>{isSaving ? "Saving…" : "Save changes"}</button>
+        </div>
+      </form>
+    </section>
   </section>;
 }
 

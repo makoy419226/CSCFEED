@@ -14,7 +14,8 @@
     "preview": "vite preview",
     "test": "node --test",
     "db:generate": "drizzle-kit generate --config=drizzle.config.js",
-    "db:migrate": "drizzle-kit migrate --config=drizzle.config.js"
+    "db:migrate": "drizzle-kit migrate --config=drizzle.config.js",
+    "db:studio": "drizzle-kit studio --config=drizzle.config.js --host=127.0.0.1"
   },
   "dependencies": {
     "@supabase/server": "^1.9.2",
@@ -27,9 +28,11 @@
     "mammoth": "^1.13.0",
     "multer": "^2.5.0",
     "nodemailer": "^10.6.1",
+    "pdfkit": "^0.21.0",
     "pg": "^8.23.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "yazl": "^3.3.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {

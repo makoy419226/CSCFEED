@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reportFormSchema, reportQuerySchema } from "./schemas.js";
+import { adminProfileUpdateSchema, reportFormSchema, reportQuerySchema } from "./schemas.js";
 
 test("report forms require a valid calendar date and positive project id", () => {
   assert.equal(reportFormSchema.safeParse({
@@ -22,4 +22,14 @@ test("report query rejects a reversed date range", () => {
     fromDate: "2026-06-02",
     toDate: "2026-06-01",
   }).success, false);
+});
+
+test("admin profile updates require the current password and validate optional new passwords", () => {
+  const base = { displayName: "Site Administrator", currentPassword: "current-password" };
+
+  assert.equal(adminProfileUpdateSchema.safeParse(base).success, true);
+  assert.equal(adminProfileUpdateSchema.safeParse({ ...base, newPassword: "" }).success, true);
+  assert.equal(adminProfileUpdateSchema.safeParse({ ...base, newPassword: "short" }).success, false);
+  assert.equal(adminProfileUpdateSchema.safeParse({ ...base, newPassword: "a".repeat(73) }).success, false);
+  assert.equal(adminProfileUpdateSchema.safeParse({ displayName: "Admin" }).success, false);
 });

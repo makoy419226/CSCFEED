@@ -26,7 +26,8 @@ If either saved local role password is rejected, `npm run dev:local` offers an i
 - Open each employee's dated report log from the manpower directory to review report details and attachments.
 - Add a report with a project, date, signed-in user, title, description, and multiple file attachments, with a confirmation before upload.
 - Preview attached images, PDFs, DOCX/CSV text, and XLSX/CSV tables in the browser; older DOC/XLS files can be downloaded.
-- Download files from server-local storage.
+- Download a report package as a ZIP containing a PDF summary and all evidence attachments in an `evidence/` folder; individual attachments can also be downloaded separately.
+- Store and stream uploaded files from server-local storage.
 - View project cards and report counts.
 
 ## Application architecture
@@ -66,10 +67,11 @@ Apply the Drizzle-managed authentication tables after the core schema:
 
 ```powershell
 npm run db:migrate
+npm run db:studio
 npm run dev
 ```
 
-The Drizzle auth schema is in `src/db/auth-schema.js`; the full ORM table definitions are in `src/db/schema.js`. Configuration is in `drizzle.config.js`, and generated migrations are stored in `database/drizzle`. Run migrations with the schema-owner URL. After changing a Drizzle-managed table, generate and review a migration with `npm run db:generate`, then apply it with `npm run db:migrate`.
+`npm run db:studio` opens Drizzle Studio on `127.0.0.1:4983` and uses `MIGRATION_DATABASE_URL` or `DATABASE_URL` from `.env`. The Drizzle auth schema is in `src/db/auth-schema.js`; the full ORM table definitions are in `src/db/schema.js`. Configuration is in `drizzle.config.js`, and generated migrations are stored in `database/drizzle`. Run migrations with the schema-owner URL. After changing a Drizzle-managed table, generate and review a migration with `npm run db:generate`, then apply it with `npm run db:migrate`.
 
 Run the migration as a dedicated non-superuser database owner. The management functions are `SECURITY DEFINER`; do not make a superuser their owner.
 

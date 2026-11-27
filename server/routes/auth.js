@@ -1,10 +1,10 @@
 import bcrypt from "bcryptjs";
 import express from "express";
 import rateLimit from "express-rate-limit";
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, lt, ne } from "drizzle-orm";
 import { accounts, authCredentials, authSessions } from "../../src/db/schema.js";
 import { asyncRoute, HttpError } from "../errors.js";
-import { readSessionToken, resolveIdentity } from "../identity.js";
+import { readSessionToken, requireAdmin, requireIdentity, resolveIdentity } from "../identity.js";
 import {
   clearSessionCookie,
   createSessionToken,
@@ -13,11 +13,18 @@ import {
   setSessionCookie,
 } from "../session-cookie.js";
 import { validate } from "../validation.js";
-import { loginSchema } from "../schemas.js";
+import { adminProfileUpdateSchema, loginSchema } from "../schemas.js";
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const profileUpdateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -113,6 +120,41 @@ export function createAuthRouter({ db, ready }) {
     }
     clearSessionCookie(res);
     return res.json({ success: true });
+  }));
+
+  router.patch("/profile", profileUpdateLimiter, requireIdentity(db), requireAdmin, validate(adminProfileUpdateSchema), asyncRoute(async (req, res) => {
+    const { displayName, currentPassword, newPassword } = req.validated.body;
+    const [credential] = await db.select({ passwordHash: authCredentials.passwordHash })
+      .from(authCredentials)
+      .where(eq(authCredentials.accountId, req.identity.id))
+      .limit(1);
+
+    if (!credential || !(await bcrypt.compare(currentPassword, credential.passwordHash))) {
+      throw new HttpError(401, "Current password is incorrect.");
+    }
+
+    const passwordHash = newPassword ? await bcrypt.hash(newPassword, 12) : null;
+    const currentTokenHash = createTokenHash(readSessionToken(req));
+    await db.transaction(async (tx) => {
+      await tx.update(accounts)
+        .set({ fullName: displayName })
+        .where(eq(accounts.id, req.identity.id));
+
+      if (passwordHash) {
+        await tx.update(authCredentials)
+          .set({ passwordHash })
+          .where(eq(authCredentials.accountId, req.identity.id));
+        await tx.delete(authSessions).where(and(
+          eq(authSessions.accountId, req.identity.id),
+          ne(authSessions.tokenHash, currentTokenHash),
+        ));
+      }
+    });
+
+    return res.json({
+      success: true,
+      user: { ...req.identity, name: displayName },
+    });
   }));
 
   return router;
