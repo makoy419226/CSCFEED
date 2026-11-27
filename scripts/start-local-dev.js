@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
+import { connect, createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
@@ -12,6 +12,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const envPath = path.join(root, ".env");
 const { Client } = pg;
 const skipDatabaseStartup = process.argv.includes("--skip-database");
+// --prepare-only: start PostgreSQL, create/repair the database, run migrations, then exit
+// without starting the dev servers (used by scripts/start-local.js).
+const prepareOnly = process.argv.includes("--prepare-only");
 process.chdir(root);
 config({ path: envPath });
 
@@ -33,6 +36,20 @@ function quoteIdentifier(value) {
 async function assertPortAvailable(port, service, hosts) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`${service} port must be a number from 1 to 65535.`);
+  }
+  // On Windows a test bind to 127.0.0.1 can succeed even while another process
+  // listens on 0.0.0.0, so also try connecting: if anything answers, it is taken.
+  for (const host of ["127.0.0.1", "::1"]) {
+    const answered = await new Promise((resolve) => {
+      const socket = connect({ port, host });
+      socket.setTimeout(1000);
+      socket.once("connect", () => { socket.destroy(); resolve(true); });
+      socket.once("timeout", () => { socket.destroy(); resolve(false); });
+      socket.once("error", () => resolve(false));
+    });
+    if (answered) {
+      throw new Error(`${service} port ${port} is already in use (an earlier dev server may still be running). Stop it before starting another copy.`);
+    }
   }
   for (const host of hosts) {
     await new Promise((resolve, reject) => {
@@ -498,6 +515,10 @@ async function main() {
     await runtimeClient.end();
   }
 
+  if (prepareOnly) {
+    console.info("Database is ready.");
+    return;
+  }
   console.info("Database is ready. Starting the CSC Feed API and web app...");
   await runNpm(["run", "dev:stack"]);
 }

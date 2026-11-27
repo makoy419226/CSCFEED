@@ -34,5 +34,18 @@ foreach ($port in $ports) {
   }
 }
 
-npm run dev
+# New PC: no PostgreSQL service yet -> install it first (prompts for the
+# postgres password and elevates only for the install), then continue here.
+$pgServices = @(Get-Service -Name 'postgresql*' -ErrorAction SilentlyContinue)
+if ($pgServices.Count -eq 0) {
+  Write-Host "PostgreSQL is not installed on this PC. Running first-time setup..." -ForegroundColor Cyan
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "setup-local.ps1") -SetupOnly
+  if ($LASTEXITCODE -ne 0) {
+    Write-Error "First-time setup failed. Fix the error above and rerun this script."
+    exit 1
+  }
+}
+
+# Database + migrations, Super User check, then API + web with a readiness check.
+npm run start:local
 exit $LASTEXITCODE

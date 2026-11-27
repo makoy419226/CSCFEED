@@ -6,6 +6,7 @@
   "scripts": {
     "setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-local.ps1",
     "dev": "node scripts/ensure-deps.js && node scripts/start-local-dev.js",
+    "start:local": "node scripts/ensure-deps.js && node scripts/start-local.js",
     "dev:local": "npm run dev",
     "admin:doctor": "node scripts/admin-doctor.js",
     "dev:stack": "concurrently -k -n api,web \"npm:dev:api\" \"npm:dev:web\"",

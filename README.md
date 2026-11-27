@@ -8,6 +8,8 @@ A responsive frontend skeleton for sharing reports across multiple projects. The
 npm install
 ```
 
+**Quick start (any PC, including a new one):** run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-local.ps1`. If PostgreSQL is not installed it runs the first-time setup below, then `npm run start:local` ([scripts/start-local.js](scripts/start-local.js)) prepares the database and migrations, creates or checks the Super User (failing early with the real error), starts the API and web app, waits until the API reports ready, and prints the sign-in details.
+
 On a new Windows PC, run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-local.ps1` (or `npm run setup` once Node.js is installed). It installs Node.js LTS and PostgreSQL 17 on port 5432 with winget if they are missing (asking for a new `postgres` superuser password and elevating only for the install), sets the PostgreSQL service to start automatically, adds `psql` to your user PATH, runs `npm install`, and then launches the app as described below. Pass `-SetupOnly` to stop before launching.
 
 Each PC has its own local database, so accounts, reports, and a changed Super User password do not carry over between PCs. If the Super User cannot sign in, run `npm run admin:doctor` to check the database, migrations, and admin account; `npm run admin:doctor -- --reset` sets a new Super User password (12–72 characters) and signs out existing admin sessions.
