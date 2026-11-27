@@ -1,9 +1,9 @@
 import express from "express";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { accounts, projects, reports } from "../../src/db/schema.js";
 import { asyncRoute, HttpError } from "../errors.js";
-import { hasAdminAccess, requireAdmin, requireIdentity } from "../identity.js";
-import { projectSchema, idParamsSchema } from "../schemas.js";
+import { hasAdminAccess, requireAdmin, requireIdentity, superUserRole } from "../identity.js";
+import { projectManagerAppointmentSchema, projectSchema, idParamsSchema } from "../schemas.js";
 import { validate } from "../validation.js";
 
 function toProject(project) {
@@ -67,6 +67,77 @@ export function createProjectsRouter({ db, ready }) {
 
     if (!project) throw new HttpError(404, "Project not found.");
     return res.json({ success: true, data: toProject(project) });
+  }));
+
+  router.patch("/:id/manager", requireAdmin, validate(idParamsSchema, "params"), validate(projectManagerAppointmentSchema), asyncRoute(async (req, res) => {
+    const projectId = req.validated.params.id;
+    const { punchId } = req.validated.body;
+    try {
+      const result = await db.transaction(async (tx) => {
+        const [project] = await tx.select({
+          id: projects.id,
+          name: projects.name,
+          description: projects.description,
+          color: projects.color,
+          managerId: projects.managerId,
+        })
+          .from(projects)
+          .where(and(eq(projects.id, projectId), eq(projects.active, true)))
+          .for("update");
+        if (!project) throw new HttpError(404, "Active project not found.");
+
+        if (punchId === null) {
+          if (project.managerId) {
+            await tx.update(projects).set({ managerId: null }).where(eq(projects.id, project.id));
+          }
+          return { project: { ...project, managerName: null, managerPunchId: null }, previousProjectId: null };
+        }
+
+        const [manager] = await tx.select({
+          id: accounts.id,
+          punchId: accounts.punchId,
+          fullName: accounts.fullName,
+          accountRole: accounts.accountRole,
+          active: accounts.active,
+        })
+          .from(accounts)
+          .where(eq(accounts.punchId, punchId))
+          .for("update");
+        if (!manager || manager.punchId === "0000" || manager.accountRole === superUserRole) {
+          throw new HttpError(404, "Employee account not found.");
+        }
+        if (!manager.active || manager.accountRole !== "employee") {
+          throw new HttpError(409, "Only active employee accounts can be project managers.");
+        }
+
+        // A person manages at most one project: move them off any previous one.
+        const [previous] = await tx.select({ id: projects.id })
+          .from(projects)
+          .where(and(eq(projects.managerId, manager.id), ne(projects.id, project.id)))
+          .for("update");
+        if (previous) {
+          await tx.update(projects).set({ managerId: null }).where(eq(projects.id, previous.id));
+        }
+        if (Number(project.managerId) !== Number(manager.id)) {
+          await tx.update(projects).set({ managerId: manager.id }).where(eq(projects.id, project.id));
+        }
+
+        return {
+          project: { ...project, managerName: manager.fullName, managerPunchId: manager.punchId },
+          previousProjectId: previous ? String(previous.id) : null,
+        };
+      });
+
+      return res.json({
+        success: true,
+        data: { ...toProject(result.project), previousProjectId: result.previousProjectId },
+      });
+    } catch (error) {
+      if (error?.code === "23505" || error?.cause?.code === "23505") {
+        throw new HttpError(409, "This employee is already assigned to manage another project.");
+      }
+      throw error;
+    }
   }));
 
   router.delete("/:id", requireAdmin, validate(idParamsSchema, "params"), asyncRoute(async (req, res) => {

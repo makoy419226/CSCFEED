@@ -52,6 +52,10 @@ export const manpowerActiveSchema = z.object({
   active: z.boolean(),
 });
 
+export const projectManagerAppointmentSchema = z.object({
+  punchId: employeePunchId.nullable(),
+}).strict();
+
 export const projectManagerAssignmentSchema = z.object({
   projectId: positiveId.nullable(),
 }).strict();

@@ -450,7 +450,6 @@ function Workspace({ user, onLogout, onUserUpdated }) {
   const [manpowerSearch, setManpowerSearch] = useState("");
   const [updatingAdminAccessPunchId, setUpdatingAdminAccessPunchId] = useState(null);
   const [deletingManpowerPunchId, setDeletingManpowerPunchId] = useState(null);
-  const [assigningProjectManagerPunchId, setAssigningProjectManagerPunchId] = useState(null);
   const [reportLogPerson, setReportLogPerson] = useState(null);
   const [employeeReports, setEmployeeReports] = useState([]);
   const [isEmployeeReportsLoading, setIsEmployeeReportsLoading] = useState(false);
@@ -474,7 +473,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
   const [isManpowerFormOpen, setIsManpowerFormOpen] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
   const [editingManpower, setEditingManpower] = useState(null);
-  const [projectForm, setProjectForm] = useState({ name: "", description: "", color: "blue" });
+  const [projectForm, setProjectForm] = useState({ name: "", description: "", color: "blue", managerPunchId: "" });
   const [manpowerForm, setManpowerForm] = useState({ punchId: "", name: "", designation: "" });
   const [projectFormError, setProjectFormError] = useState("");
   const [manpowerFormError, setManpowerFormError] = useState("");
@@ -693,8 +692,8 @@ function Workspace({ user, onLogout, onUserUpdated }) {
     if (!isAdministrator) return;
     setEditingProject(project);
     setProjectForm(project
-      ? { name: project.name, description: project.description || "", color: project.color }
-      : { name: "", description: "", color: projectColors[projects.length % projectColors.length] });
+      ? { name: project.name, description: project.description || "", color: project.color, managerPunchId: project.managerPunchId || "" }
+      : { name: "", description: "", color: projectColors[projects.length % projectColors.length], managerPunchId: "" });
     setProjectFormError("");
     setIsProjectFormOpen(true);
   };
@@ -712,26 +711,38 @@ function Workspace({ user, onLogout, onUserUpdated }) {
       return;
     }
 
+    const { managerPunchId, ...projectDetails } = projectForm;
+    let savedProject = null;
     try {
       const result = await apiRequest(
         editingProject ? `/api/projects/${editingProject.id}` : "/api/projects",
         {
           method: editingProject ? "PUT" : "POST",
-          body: { ...projectForm, name },
+          body: { ...projectDetails, name },
         },
       );
+      savedProject = result.data;
       if (editingProject) {
         setProjects((items) => items.map((project) => project.id === editingProject.id
           ? { ...result.data, reportCount: project.reportCount, managerName: project.managerName, managerPunchId: project.managerPunchId }
           : project));
-        setNotice("Project details updated.");
       } else {
         setProjects((items) => [...items, result.data].sort((a, b) => a.name.localeCompare(b.name)));
-        setNotice("Project added. You can now upload reports to it.");
       }
+
+      const previousManagerPunchId = editingProject?.managerPunchId || "";
+      if (managerPunchId !== previousManagerPunchId) {
+        await appointProjectManager(savedProject, managerPunchId || null, previousManagerPunchId || null);
+      }
+      setNotice(editingProject ? "Project details updated." : "Project added. You can now upload reports to it.");
       setIsProjectFormOpen(false);
     } catch (error) {
-      setProjectFormError(error instanceof Error ? error.message : "Unable to save the project.");
+      const message = error instanceof Error ? error.message : "Unable to save the project.";
+      if (savedProject && !editingProject) {
+        // The project was created but the manager appointment failed; switch to editing it.
+        setEditingProject(savedProject);
+      }
+      setProjectFormError(savedProject ? `Project saved, but the Project Manager was not assigned: ${message}` : message);
     }
     window.setTimeout(() => setNotice(""), 5000);
   };
@@ -775,25 +786,28 @@ function Workspace({ user, onLogout, onUserUpdated }) {
     window.setTimeout(() => setNotice(""), 5000);
   };
 
-  const assignProjectManager = async (person, projectId) => {
-    if (!isAdministrator || assigningProjectManagerPunchId) return;
-    setAssigningProjectManagerPunchId(person.punchId);
-    try {
-      const result = await apiRequest(`/api/manpower/${encodeURIComponent(person.punchId)}/project-manager`, {
-        method: "PATCH",
-        body: { projectId: projectId ? Number(projectId) : null },
-      });
-      setManpower((items) => items.map((item) => item.punchId === person.punchId ? result.data : item));
-      syncProjectManager(person.punchId, result.data);
-      setNotice(result.data.projectManagerProjectName
-        ? `${person.name} assigned to manage ${result.data.projectManagerProjectName}.`
-        : `${person.name} project manager access removed.`);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Unable to update the Project Manager assignment.");
-    } finally {
-      setAssigningProjectManagerPunchId(null);
-    }
-    window.setTimeout(() => setNotice(""), 5000);
+  // Appoint (or clear, with null) the Project Manager of one project and sync local state.
+  const appointProjectManager = async (project, managerPunchId, previousManagerPunchId) => {
+    const result = await apiRequest(`/api/projects/${encodeURIComponent(project.id)}/manager`, {
+      method: "PATCH",
+      body: { punchId: managerPunchId },
+    });
+    const { previousProjectId, ...updated } = result.data;
+    setProjects((items) => items.map((item) => {
+      if (item.id === updated.id) return { ...item, managerName: updated.managerName, managerPunchId: updated.managerPunchId };
+      if (previousProjectId && item.id === previousProjectId) return { ...item, managerName: null, managerPunchId: null };
+      return item;
+    }));
+    setManpower((items) => items.map((person) => {
+      if (managerPunchId && person.punchId === managerPunchId) {
+        return { ...person, projectManagerProjectId: updated.id, projectManagerProjectName: updated.name };
+      }
+      if (previousManagerPunchId && person.punchId === previousManagerPunchId) {
+        return { ...person, projectManagerProjectId: null, projectManagerProjectName: null };
+      }
+      return person;
+    }));
+    return updated;
   };
 
   const openManpowerForm = (person = null) => {
@@ -1224,11 +1238,8 @@ function Workspace({ user, onLogout, onUserUpdated }) {
               onEdit={openManpowerForm}
               onToggleActive={toggleManpowerActive}
               onToggleAdminAccess={toggleManpowerAdminAccess}
-              onAssignProjectManager={assignProjectManager}
               onDeletePerson={deleteManpowerAccount}
               onViewReports={openEmployeeReportLog}
-              projects={projects}
-              assigningProjectManagerPunchId={assigningProjectManagerPunchId}
             />
           ) : activePage === "Settings" && isSuperUser ? (
             <AdminSettingsPage
@@ -1553,6 +1564,25 @@ function Workspace({ user, onLogout, onUserUpdated }) {
                 {projectColors.map((color) => <option key={color} value={color}>{color[0].toUpperCase() + color.slice(1)}</option>)}
               </select>
             </label>
+            <label className="form-label">Project Manager <span className="optional">(optional)</span>
+              <select value={projectForm.managerPunchId} onChange={(event) => { setProjectForm({ ...projectForm, managerPunchId: event.target.value }); setProjectFormError(""); }}>
+                <option value="">Not assigned</option>
+                {manpower
+                  .filter((person) => (person.active && !person.adminAccess) || person.punchId === projectForm.managerPunchId)
+                  .map((person) => {
+                    const managesOther = person.projectManagerProjectId && person.projectManagerProjectId !== editingProject?.id;
+                    return <option key={person.punchId} value={person.punchId}>
+                      {person.name} ({person.punchId}){managesOther ? ` — currently manages ${person.projectManagerProjectName}` : ""}
+                    </option>;
+                  })}
+              </select>
+              {(() => {
+                const selected = manpower.find((person) => person.punchId === projectForm.managerPunchId);
+                return selected?.projectManagerProjectId && selected.projectManagerProjectId !== editingProject?.id
+                  ? <small className="field-hint">{selected.name} will be moved from {selected.projectManagerProjectName} to this project.</small>
+                  : <small className="field-hint">The Project Manager can upload, edit, archive, and export reports in this project only.</small>;
+              })()}
+            </label>
             {projectFormError && <p className="field-error" role="alert">{projectFormError}</p>}
             <div className="modal-footer">
               <span><ShieldCheck size={15} /> Project members can share reports</span>
@@ -1719,8 +1749,6 @@ function ManpowerPage({
   query,
   canManageAdminAccess,
   canDeleteAccounts,
-  projects,
-  assigningProjectManagerPunchId,
   updatingAdminAccessPunchId,
   deletingManpowerPunchId,
   onSearch,
@@ -1728,7 +1756,6 @@ function ManpowerPage({
   onEdit,
   onToggleActive,
   onToggleAdminAccess,
-  onAssignProjectManager,
   onDeletePerson,
   onViewReports,
 }) {
@@ -1743,7 +1770,7 @@ function ManpowerPage({
     </div>
     <aside className="admin-rights-note" aria-label="Administrator permissions">
       <ShieldCheck size={17} />
-      <span><strong>Admins can view and download all reports, manage projects and manpower accounts, and archive reports.</strong> Assign an active employee to manage one project; that Project Manager can upload, edit, archive, and export reports in that project only. Only the Super User can manage admin access and account settings, and permanently delete employee or appointed admin accounts. Deleted users' reports and uploader attribution are preserved. The Super User cannot be changed by appointed admins. Appointed admins sign in with Punch ID only, so grant access only to trusted users.</span>
+      <span><strong>Admins can view and download all reports, manage projects and manpower accounts, and archive reports.</strong> To appoint a Project Manager, open Projects, edit the project, and choose an active employee; that Project Manager can upload, edit, archive, and export reports in that project only. Only the Super User can manage admin access and account settings, and permanently delete employee or appointed admin accounts. Deleted users' reports and uploader attribution are preserved. The Super User cannot be changed by appointed admins. Appointed admins sign in with Punch ID only, so grant access only to trusted users.</span>
     </aside>
     <section className="report-section" aria-labelledby="manpower-list-heading">
       <div className="section-heading">
@@ -1780,19 +1807,9 @@ function ManpowerPage({
                 </button>
               </td>
               <td>
-                <select
-                  className="project-manager-select"
-                  aria-label={`Assign ${person.name} as Project Manager`}
-                  value={person.projectManagerProjectId || ""}
-                  disabled={person.adminAccess || !person.active || assigningProjectManagerPunchId !== null}
-                  onChange={(event) => onAssignProjectManager(person, event.target.value)}
-                >
-                  <option value="">Not assigned</option>
-                  {projects.filter((project) => !project.managerPunchId || project.managerPunchId === person.punchId).map((project) => (
-                    <option key={project.id} value={project.id}>{project.name}</option>
-                  ))}
-                </select>
-                {person.projectManagerProjectName && <small className="project-manager-assignment">Manages {person.projectManagerProjectName}</small>}
+                {person.projectManagerProjectName
+                  ? <span className="project-manager-badge" title="Change from Projects → Edit project">{person.projectManagerProjectName}</span>
+                  : <span className="project-manager-none">—</span>}
               </td>
               <td>
                 {person.adminAccess
