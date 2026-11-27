@@ -82,17 +82,35 @@ async function main() {
       ok("Database migrations are applied");
     }
 
-    const { rows } = await client.query(`
+    const findAdmin = async () => (await client.query(`
       SELECT a.id, a.punch_id, a.account_role, a.active, c.username, c.password_hash
         FROM cscfeed.auth_credentials c
         JOIN cscfeed.accounts a ON a.id = c.account_id
-       WHERE c.username = 'admin'`);
-    const admin = rows[0];
+       WHERE c.username = 'admin'`)).rows[0];
+    let admin = await findAdmin();
     if (!admin) {
-      bad("No Super User (username \"admin\") exists yet.");
-      note("It is created when the API starts successfully. Run npm run dev, then sign in with");
-      note("username admin and the BOOTSTRAP_ADMIN_PASSWORD from .env (admin123 if unset).");
-      return 1;
+      bad("No Super User (username \"admin\") exists yet; the API has not completed its first startup.");
+      note("Creating it now with the same startup step the API uses...");
+      // Same code path as server/index.js, so any failure here is the real startup error.
+      const { getDatabase } = await import("../server/db.js");
+      const { bootstrapApplication } = await import("../server/bootstrap.js");
+      const { db, client: pool } = getDatabase();
+      try {
+        await bootstrapApplication({ db });
+      } catch (error) {
+        bad(`Creating the Super User failed: ${error.message}${error.code ? ` (code ${error.code})` : ""}`);
+        if (error.cause?.message) note(`Cause: ${error.cause.message}`);
+        note("Send this message to get it fixed.");
+        return 1;
+      } finally {
+        await pool.end().catch(() => {});
+      }
+      admin = await findAdmin();
+      if (!admin) {
+        bad("The startup step finished but no Super User was found.");
+        return 1;
+      }
+      ok("Created the Super User account.");
     }
     ok(`Super User account exists (username "admin", Punch ID ${admin.punch_id})`);
 
