@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowDownToLine,
@@ -9,11 +9,11 @@ import {
   Check,
   ChevronDown,
   CircleHelp,
-  ClipboardList,
   File,
   FileText,
   FolderKanban,
   LayoutDashboard,
+  LogOut,
   Menu,
   Pencil,
   Plus,
@@ -23,6 +23,8 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
+import { initialManpower } from "./manpower";
+import Login from "./Login";
 import "./styles.css";
 
 const initialProjects = [
@@ -40,30 +42,103 @@ function formatInputDate(date) {
 }
 
 const today = formatInputDate(new Date());
-const currentUser = "Maya Santos";
 
 function formatDate(value) {
   return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(new Date(`${value}T12:00:00`));
 }
 
 function App() {
+  const [user, setUser] = useState(null);
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
+  const [authMessage, setAuthMessage] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const restoreSession = async () => {
+      try {
+        const response = await fetch("/api/auth/session", { credentials: "include" });
+        if (response.status === 401) return;
+        if (!(response.headers.get("content-type") || "").toLowerCase().includes("application/json")) {
+          throw new Error("The authentication service is unavailable. Reports remain locked.");
+        }
+
+        const result = await response.json();
+        if (!response.ok || !result || result.success !== true || !result.user
+          || typeof result.user.name !== "string" || typeof result.user.role !== "string") {
+          throw new Error(result.message || "Unable to verify your sign-in. Reports remain locked.");
+        }
+        if (active) {
+          setUser({
+            name: result.user.name || result.user.username,
+            role: result.user.role.toLowerCase(),
+            punchId: result.user.punchId || result.user.username || "",
+          });
+        }
+      } catch (error) {
+        if (active) {
+          setAuthMessage(error instanceof Error ? error.message : "Unable to verify your sign-in. Reports remain locked.");
+        }
+      } finally {
+        if (active) setIsCheckingSession(false);
+      }
+    };
+
+    void restoreSession();
+    return () => { active = false; };
+  }, []);
+
+  const signOut = async () => {
+    const response = await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!(response.headers.get("content-type") || "").toLowerCase().includes("application/json")) {
+      throw new Error("The authentication service did not confirm sign-out.");
+    }
+    const result = await response.json();
+    if (!response.ok || !result || result.success !== true) {
+      throw new Error(result.message || "Unable to sign out.");
+    }
+    setUser(null);
+    setAuthMessage("");
+  };
+
+  if (isCheckingSession) {
+    return <main className="auth-loading" role="status">Checking your sign-in…</main>;
+  }
+  if (!user) {
+    return <Login onLogin={(account) => { setUser(account); setAuthMessage(""); }} serviceMessage={authMessage} />;
+  }
+  return <Workspace user={user} onLogout={signOut} />;
+}
+
+function Workspace({ user, onLogout }) {
   const [activePage, setActivePage] = useState("Overview");
   const [projects, setProjects] = useState(initialProjects);
+  const [manpower, setManpower] = useState(() => initialManpower.map((person) => ({ ...person, active: true })));
+  const [manpowerSearch, setManpowerSearch] = useState("");
   const [projectFilter, setProjectFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState("");
   const [reports, setReports] = useState([]);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isProjectFormOpen, setIsProjectFormOpen] = useState(false);
+  const [isManpowerFormOpen, setIsManpowerFormOpen] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
+  const [editingManpower, setEditingManpower] = useState(null);
   const [projectForm, setProjectForm] = useState({ name: "", description: "", color: "blue" });
+  const [manpowerForm, setManpowerForm] = useState({ punchId: "", name: "", designation: "" });
   const [projectFormError, setProjectFormError] = useState("");
+  const [manpowerFormError, setManpowerFormError] = useState("");
   const [notice, setNotice] = useState("");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [form, setForm] = useState({ projectId: "", date: today, title: "", description: "" });
   const [selectedFile, setSelectedFile] = useState(null);
   const [downloadableFiles, setDownloadableFiles] = useState({});
   const fileInput = useRef(null);
+  const currentUser = user.name;
+  const userInitials = currentUser.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+  const isAdministrator = user.role === "admin";
   const projectColors = ["blue", "orange", "green", "purple"];
   const projectOptions = [{ id: "all", name: "All projects" }, ...projects];
 
@@ -73,6 +148,10 @@ function App() {
     return projectMatches && (!search || text.includes(search.toLowerCase())) && (!dateFilter || report.date === dateFilter);
   }), [reports, projectFilter, search, dateFilter]);
 
+  const filteredManpower = useMemo(() => manpower.filter((person) =>
+    `${person.punchId} ${person.name} ${person.designation}`.toLowerCase().includes(manpowerSearch.trim().toLowerCase()),
+  ), [manpower, manpowerSearch]);
+
   const openUpload = () => {
     setForm({ projectId: projectFilter === "all" ? "" : projectFilter, date: today, title: "", description: "" });
     setSelectedFile(null);
@@ -81,6 +160,7 @@ function App() {
   };
 
   const openProjectForm = (project = null) => {
+    if (!isAdministrator) return;
     setEditingProject(project);
     setProjectForm(project
       ? { name: project.name, description: project.description || "", color: project.color }
@@ -91,6 +171,7 @@ function App() {
 
   const submitProject = (event) => {
     event.preventDefault();
+    if (!isAdministrator) return;
     const name = projectForm.name.trim();
     if (!name) return;
     const alreadyExists = projects.some((project) =>
@@ -119,6 +200,57 @@ function App() {
     }
 
     setIsProjectFormOpen(false);
+    window.setTimeout(() => setNotice(""), 5000);
+  };
+
+  const openManpowerForm = (person = null) => {
+    if (!isAdministrator) return;
+    setEditingManpower(person);
+    setManpowerForm(person
+      ? { punchId: person.punchId, name: person.name, designation: person.designation }
+      : { punchId: "", name: "", designation: "" });
+    setManpowerFormError("");
+    setIsManpowerFormOpen(true);
+  };
+
+  const submitManpower = (event) => {
+    event.preventDefault();
+    if (!isAdministrator) return;
+    const punchId = manpowerForm.punchId.trim();
+    const name = manpowerForm.name.trim();
+    const designation = manpowerForm.designation.trim();
+    if (!/^\d{3,10}$/.test(punchId)) {
+      setManpowerFormError("Punch ID must contain 3 to 10 digits.");
+      return;
+    }
+    if (!name || !designation) return;
+    const duplicateId = manpower.some((person) =>
+      person.punchId !== editingManpower?.punchId && person.punchId === punchId,
+    );
+    if (duplicateId) {
+      setManpowerFormError("That Punch ID is already in the manpower list.");
+      return;
+    }
+
+    if (editingManpower) {
+      setManpower((items) => items.map((person) => person.punchId === editingManpower.punchId
+        ? { ...person, punchId, name, designation }
+        : person));
+      setNotice("Manpower account updated.");
+    } else {
+      setManpower((items) => [...items, { punchId, name, designation, active: true }]);
+      setNotice("Manpower account added.");
+    }
+    setIsManpowerFormOpen(false);
+    window.setTimeout(() => setNotice(""), 5000);
+  };
+
+  const toggleManpowerActive = (person) => {
+    if (!isAdministrator) return;
+    setManpower((items) => items.map((item) => item.punchId === person.punchId
+      ? { ...item, active: !item.active }
+      : item));
+    setNotice(`${person.name} marked ${person.active ? "inactive" : "active"}. Changes are in this browser session only.`);
     window.setTimeout(() => setNotice(""), 5000);
   };
 
@@ -156,6 +288,7 @@ function App() {
   };
 
   const navigate = (page) => {
+    if (page === "Manpower" && !isAdministrator) return;
     setActivePage(page);
     setMobileNavOpen(false);
     if (page === "Projects") setProjectFilter("all");
@@ -168,7 +301,7 @@ function App() {
       {mobileNavOpen && <button className="mobile-backdrop" aria-label="Close menu" onClick={() => setMobileNavOpen(false)} />}
       <aside className={`sidebar ${mobileNavOpen ? "sidebar-open" : ""}`}>
         <a className="brand" href="#" onClick={(event) => { event.preventDefault(); navigate("Overview"); }}>
-          <span className="brand-mark"><ClipboardList size={20} /></span>
+          <img className="brand-logo" src="/concord-logo.png" alt="Concord logo" />
           <span className="brand-name">CSC Feed</span>
         </a>
 
@@ -183,9 +316,10 @@ function App() {
           <button className={`nav-item ${activePage === "Overview" ? "nav-active" : ""}`} onClick={() => navigate("Overview")}><LayoutDashboard size={18} /><span>Overview</span></button>
           <button className={`nav-item ${activePage === "Reports" ? "nav-active" : ""}`} onClick={() => navigate("Reports")}><FileText size={18} /><span>Reports</span><span className="nav-count">{reports.length}</span></button>
           <button className={`nav-item ${activePage === "Projects" ? "nav-active" : ""}`} onClick={() => navigate("Projects")}><FolderKanban size={18} /><span>Projects</span></button>
+          {isAdministrator && <button className={`nav-item ${activePage === "Manpower" ? "nav-active" : ""}`} onClick={() => navigate("Manpower")}><UsersRound size={18} /><span>Manpower</span><span className="nav-count">{manpower.length}</span></button>}
         </nav>
 
-        <div className="nav-label project-nav-label">YOUR PROJECTS <button aria-label="Add project" onClick={() => openProjectForm()}><Plus size={15} /></button></div>
+        <div className="nav-label project-nav-label">YOUR PROJECTS {isAdministrator && <button aria-label="Add project" onClick={() => openProjectForm()}><Plus size={15} /></button>}</div>
         <nav className="project-nav" aria-label="Projects">
           {projectsWithReports.map((project) => (
             <button key={project.id} className={`nav-item project-nav-item ${projectFilter === project.id ? "nav-active" : ""}`} onClick={() => { setProjectFilter(project.id); navigate("Reports"); }}>
@@ -197,9 +331,14 @@ function App() {
         <div className="sidebar-bottom">
           <button className="nav-item support-link" onClick={() => setNotice("Help center integration coming soon.")}><CircleHelp size={18} /><span>Help & support</span></button>
           <div className="sidebar-user">
-            <div className="user-avatar">MS</div>
-            <div className="user-details"><strong>{currentUser}</strong><small>Punch ID · Demo</small></div>
-            <button className="user-more" aria-label="Account options"><ChevronDown size={16} /></button>
+            <div className="user-avatar">{userInitials}</div>
+            <div className="user-details"><strong>{currentUser}</strong><small>{isAdministrator ? "Administrator" : `Punch ID ${user.punchId}`}</small></div>
+            <button className="user-more" aria-label="Sign out" title="Sign out" onClick={() => {
+              onLogout().catch((error) => {
+                setNotice(error instanceof Error ? error.message : "Unable to sign out.");
+                window.setTimeout(() => setNotice(""), 5000);
+              });
+            }}><LogOut size={16} /></button>
           </div>
         </div>
       </aside>
@@ -209,27 +348,30 @@ function App() {
           <button className="mobile-menu" aria-label="Open menu" onClick={() => setMobileNavOpen(true)}><Menu size={21} /></button>
           <div className="breadcrumbs"><span>Workspace</span><span className="crumb-slash">/</span><strong>{activePage}</strong></div>
           <div className="topbar-actions">
-            <span className="secure-label"><ShieldCheck size={15} /> Punch ID ready</span>
+            <span className="secure-label"><ShieldCheck size={15} /> Signed in</span>
             <button className="icon-button notification-button" aria-label="Notifications" onClick={() => setNotice("You’re all caught up.")}><Bell size={18} /><span className="notification-dot" /></button>
-            <button className="top-user" title="Punch ID account"><span className="user-avatar small-avatar">MS</span><ChevronDown size={15} /></button>
+            <button className="top-user" title="Signed-in account"><span className="user-avatar small-avatar">{userInitials}</span><ChevronDown size={15} /></button>
           </div>
         </header>
 
         <div className="page-content">
-          {activePage === "Projects" ? (
+          {activePage === "Manpower" && isAdministrator ? (
+            <ManpowerPage people={filteredManpower} total={manpower.length} query={manpowerSearch} onSearch={setManpowerSearch} onAdd={() => openManpowerForm()} onEdit={openManpowerForm} onToggleActive={toggleManpowerActive} />
+          ) : activePage === "Projects" ? (
             <ProjectsPage
               projects={projectsWithReports}
               reports={reports}
               onSelect={(id) => { setProjectFilter(id); navigate("Reports"); }}
               onCreate={() => openProjectForm()}
               onEdit={openProjectForm}
+              canManage={isAdministrator}
             />
           ) : (
             <>
               <section className="page-heading">
                 <div>
                   <div className="eyebrow"><span className="eyebrow-dot" /> PROJECT REPORTS</div>
-                  <h1>{activePage === "Overview" ? "Good morning, Maya" : "Reports"}</h1>
+                  <h1>{activePage === "Overview" ? `Good morning, ${currentUser.split(/\s+/)[0]}` : "Reports"}</h1>
                   <p>{activePage === "Overview" ? "A clear view of updates across all your projects." : "Browse, filter, and download reports shared by your team."}</p>
                 </div>
                 <button className="button button-primary" onClick={openUpload}><Upload size={17} /> Upload report</button>
@@ -341,6 +483,37 @@ function App() {
           </form>
         </section>
       </div>}
+
+      {isManpowerFormOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsManpowerFormOpen(false); }}>
+        <section className="upload-modal project-modal" role="dialog" aria-modal="true" aria-labelledby="manpower-form-title">
+          <div className="modal-heading">
+            <div>
+              <span className="modal-icon"><UsersRound size={19} /></span>
+              <div><h2 id="manpower-form-title">{editingManpower ? "Edit manpower account" : "Add manpower account"}</h2><p>Manage the employee directory using Punch IDs.</p></div>
+            </div>
+            <button className="icon-button" aria-label="Close manpower form" onClick={() => setIsManpowerFormOpen(false)}><X size={19} /></button>
+          </div>
+          <form onSubmit={submitManpower}>
+            <label className="form-label">Punch ID <span className="required">*</span>
+              <input autoFocus required inputMode="numeric" maxLength="10" placeholder="e.g. 4114" value={manpowerForm.punchId} onChange={(event) => { setManpowerForm({ ...manpowerForm, punchId: event.target.value.replace(/\D/g, "") }); setManpowerFormError(""); }} />
+            </label>
+            <label className="form-label">Employee name <span className="required">*</span>
+              <input required maxLength="120" placeholder="Enter employee name" value={manpowerForm.name} onChange={(event) => setManpowerForm({ ...manpowerForm, name: event.target.value })} />
+            </label>
+            <label className="form-label">Designation <span className="required">*</span>
+              <input required maxLength="100" placeholder="Enter designation" value={manpowerForm.designation} onChange={(event) => setManpowerForm({ ...manpowerForm, designation: event.target.value })} />
+            </label>
+            {manpowerFormError && <p className="field-error" role="alert">{manpowerFormError}</p>}
+            <div className="modal-footer">
+              <span><ShieldCheck size={15} /> Punch ID authentication requires server setup</span>
+              <div>
+                <button type="button" className="button button-secondary" onClick={() => setIsManpowerFormOpen(false)}>Cancel</button>
+                <button type="submit" className="button button-primary"><Check size={16} /> {editingManpower ? "Save changes" : "Add account"}</button>
+              </div>
+            </div>
+          </form>
+        </section>
+      </div>}
     </div>
   );
 }
@@ -354,11 +527,11 @@ function SummaryCards({ reports, projects }) {
   </section>;
 }
 
-function ProjectsPage({ projects: projectList, reports, onSelect, onCreate, onEdit }) {
+function ProjectsPage({ projects: projectList, reports, onSelect, onCreate, onEdit, canManage }) {
   return <section className="projects-page">
     <div className="page-heading">
       <div><div className="eyebrow"><span className="eyebrow-dot" /> WORKSPACE</div><h1>Your projects</h1><p>Choose a project to see its reports and updates.</p></div>
-      <button className="button button-primary" onClick={onCreate}><Plus size={17} /> New project</button>
+      {canManage && <button className="button button-primary" onClick={onCreate}><Plus size={17} /> New project</button>}
     </div>
     <div className="project-cards">{projectList.map((project) => {
       const count = reports.filter((report) => report.projectId === project.id).length;
@@ -368,10 +541,47 @@ function ProjectsPage({ projects: projectList, reports, onSelect, onCreate, onEd
           <strong>{project.name}</strong><span className="project-card-location">{project.description || "Construction project"}</span>
           <span className="project-card-meta"><FileText size={15} /> {count} {count === 1 ? "report" : "reports"} <span className="project-card-status"><span className="trend-dot" /> Active</span></span>
         </button>
-        <button className="project-card-edit" aria-label={`Edit ${project.name}`} title="Edit project" onClick={() => onEdit(project)}><Pencil size={15} /></button>
+        {canManage && <button className="project-card-edit" aria-label={`Edit ${project.name}`} title="Edit project" onClick={() => onEdit(project)}><Pencil size={15} /></button>}
       </article>;
     })}</div>
     <div className="projects-help"><ShieldCheck size={17} /><span>Project membership and access will be managed through your organization’s Punch ID account.</span></div>
+  </section>;
+}
+
+function ManpowerPage({ people, total, query, onSearch, onAdd, onEdit, onToggleActive }) {
+  return <section className="manpower-page">
+    <div className="page-heading">
+      <div>
+        <div className="eyebrow"><span className="eyebrow-dot" /> ACCOUNT MANAGEMENT</div>
+        <h1>Manpower accounts</h1>
+        <p>Existing employees indexed by their Punch ID.</p>
+      </div>
+      <button className="button button-primary" onClick={onAdd}><Plus size={17} /> Add manpower</button>
+    </div>
+    <section className="report-section" aria-labelledby="manpower-list-heading">
+      <div className="section-heading">
+        <div><h2 id="manpower-list-heading">Employee directory</h2><p>{people.length} of {total} manpower accounts</p></div>
+      </div>
+      <div className="filters">
+        <label className="search-field manpower-search"><Search size={17} /><input aria-label="Search manpower" placeholder="Search by Punch ID, name, or designation..." value={query} onChange={(event) => onSearch(event.target.value)} /></label>
+      </div>
+      <div className="table-wrap">
+        <table className="manpower-table">
+          <thead><tr><th>PUNCH ID</th><th>EMPLOYEE NAME</th><th>DESIGNATION</th><th>ACCOUNT</th><th><span className="sr-only">Actions</span></th></tr></thead>
+          <tbody>
+            {people.map((person) => <tr key={person.punchId}>
+              <td><span className="punch-id">{person.punchId}</span></td>
+              <td className="manpower-name">{person.name}</td>
+              <td>{person.designation}</td>
+              <td><button type="button" className={`directory-status ${person.active ? "" : "directory-status-inactive"}`} aria-label={`Mark ${person.name} ${person.active ? "inactive" : "active"}`} aria-pressed={person.active} onClick={() => onToggleActive(person)}><span />{person.active ? "Active" : "Inactive"}</button></td>
+              <td><button className="download-button" aria-label={`Edit ${person.name}`} title="Edit account" onClick={() => onEdit(person)}><Pencil size={15} /></button></td>
+            </tr>)}
+            {people.length === 0 && <tr><td className="empty-state" colSpan="5"><span className="empty-icon"><UsersRound size={20} /></span><strong>No manpower found</strong><span>Try a different search or add a manpower account.</span><button className="button button-secondary" onClick={onAdd}><Plus size={16} /> Add manpower</button></td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div className="table-footer"><span>Showing <strong>{people.length}</strong> of <strong>{total}</strong> accounts</span><span className="table-footer-note"><ShieldCheck size={15} /> Status changes are temporary until connected to the server</span></div>
+    </section>
   </section>;
 }
 
