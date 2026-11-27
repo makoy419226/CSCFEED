@@ -146,11 +146,11 @@ if (-not (Test-Path (Join-Path $root ".env"))) {
   Write-Host "Created .env from .env.example."
 }
 
-if (-not (Test-Path (Join-Path $root "node_modules"))) {
-  Write-Step "Installing npm packages"
-  npm install
-  if ($LASTEXITCODE -ne 0) { throw "npm install failed." }
-}
+# Always run: a node_modules copied from elsewhere or installed from an older
+# package.json can hold outdated tools (e.g. drizzle-kit without `migrate`).
+Write-Step "Installing npm packages"
+npm install
+if ($LASTEXITCODE -ne 0) { throw "npm install failed." }
 
 if ($SetupOnly) {
   Write-Step "Setup complete. Run 'npm run dev' or scripts\start-local.ps1 to start the app."
