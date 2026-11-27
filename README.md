@@ -10,6 +10,8 @@ npm install
 
 On a new Windows PC, run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-local.ps1` (or `npm run setup` once Node.js is installed). It installs Node.js LTS and PostgreSQL 17 on port 5432 with winget if they are missing (asking for a new `postgres` superuser password and elevating only for the install), sets the PostgreSQL service to start automatically, adds `psql` to your user PATH, runs `npm install`, and then launches the app as described below. Pass `-SetupOnly` to stop before launching.
 
+Each PC has its own local database, so accounts, reports, and a changed Super User password do not carry over between PCs. If the Super User cannot sign in, run `npm run admin:doctor` to check the database, migrations, and admin account; `npm run admin:doctor -- --reset` sets a new Super User password (12–72 characters) and signs out existing admin sessions.
+
 After installing PostgreSQL and Node.js, run `npm run dev` in an interactive terminal. It checks the API and web ports, starts PostgreSQL if needed, applies the migrations, and starts the app. On first run, it asks for the PostgreSQL administrator password without echo, creates the local `cscfeed` database and dedicated owner/app roles with generated passwords, and saves their connection URLs in the Git-ignored `.env`. The administrator password is not saved. Existing databases are not recreated; recovery of existing dedicated role passwords requires explicit confirmation.
 
 In VS Code, forward port `5173` to open the app; Vite proxies API requests to port `5001`. Forward port `5001` separately only when you need direct access to the API.
