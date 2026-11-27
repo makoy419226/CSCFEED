@@ -6,8 +6,9 @@ A responsive frontend skeleton for sharing reports across multiple projects. The
 
 ```sh
 npm install
-npm run dev
 ```
+
+Copy `.env.example` to `.env`, configure the database connections, and follow the PostgreSQL setup below before `npm run dev`.
 
 ## Prototype scope
 
@@ -15,24 +16,50 @@ npm run dev
 - Add projects with a name, description, and color, then edit those details later.
 - Administer the supplied manpower directory by Punch ID, employee name, designation, and active status.
 - Add a report with a project, date, signed-in user, title, description, and file.
-- Download files added during the current browser session.
+- Download files from server-local storage.
 - View project cards and report counts.
 
-The employee/admin login screens follow the reference app's sign-in pattern. The app stays locked until the auth server confirms the session; it does not authenticate against the browser-side roster. Employee sign-in submits only the Punch ID, as requested. A Punch ID is an identifier, not proof of identity, so this mode is not safe for sensitive production reports without a trusted additional verification step.
+## Application architecture
 
-In development, Vite proxies `/api/auth/*` to the existing Concord ERP auth server at `http://127.0.0.1:5000` by default. Start that server as well as CSC Feed. If it uses another origin, set `CONCORDERP_AUTH_URL` before starting Vite. `authIdentity.ts` resolves an already-issued ERP session; the login route itself is in the ERP server. CSC Feed does not connect directly to the ERP database.
+```text
+Express API
+  ├─ Authentication identity and route access checks
+  ├─ Zod input validation
+  ├─ Domain routes and report workflow transitions
+  └─ Drizzle ORM queries and transactions
+       ├─ Local PostgreSQL application data
+       ├─ PC-local filesystem storage for large technical uploads
+       └─ Optional email notifications when SMTP is configured
+```
 
-The login flow uses `GET /api/auth/session`, `POST /api/auth/login`, and `POST /api/auth/logout`. Admin login submits a username and password; the server checks the account's admin role. If the auth server is stopped or unreachable, sign-in fails closed and reports remain inaccessible. Production hosting must also proxy these routes to the trusted auth server. Project, manpower, report, and file changes remain in browser memory and reset on refresh; the PostgreSQL migration below is not yet connected to those UI flows.
+The API is split into route, identity/authorization, validation, domain, storage, and notification modules under `server/`. All projects, manpower changes, and report metadata are persisted in PostgreSQL. Uploaded files are streamed to `UPLOAD_DIR` (default `storage/reports`, excluded from Git); the default per-file limit is 512 MiB and can be changed with `MAX_UPLOAD_BYTES`. Reports become available immediately after upload. Admins can archive active reports; archived reports cannot be downloaded or restored through the app.
 
-The ERP session endpoint returns `401` when signed out and a user object containing `name`, `role`, and `username` for a valid session; CSC Feed uses `username` as the Punch ID when no explicit `punchId` is returned. The ERP login endpoint sets an `HttpOnly` session cookie, and logout clears it. Protect report and file APIs on the server as well—hiding pages in the browser is not authorization. The current admin/manpower controls are frontend-only and reset on refresh.
+Email is disabled unless SMTP settings and `REPORT_NOTIFICATION_EMAILS` are provided. If an email fails after an upload commits, the report remains saved and the API returns a notification warning.
+Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and comma-separated `REPORT_NOTIFICATION_EMAILS` in `.env` to enable upload notifications.
+
+The employee/admin login screens use a local Express API backed by PostgreSQL and Drizzle ORM. Vite proxies `/api/*` to that API on `127.0.0.1:5001`; set `CSCFEED_API_URL` if it runs elsewhere. The API issues opaque, database-backed, HttpOnly session cookies and fails closed if the database or migrations are unavailable.
+
+Copy `.env.example` to `.env` and set `DATABASE_URL` to the least-privilege runtime connection. Set `MIGRATION_DATABASE_URL` to a schema-owner connection for migration commands. In development, the API creates the initial `admin` account with password `admin123` if it does not already exist. Set `BOOTSTRAP_ADMIN_PASSWORD` to override that initial password. This development default is weak and must never be used in production. Production requires `BOOTSTRAP_ADMIN_PASSWORD` with at least 12 characters and applies that configured password to the administrator at startup. The administrator uses reserved Punch ID `0000`.
+
+Employee sign-in currently accepts Punch ID alone, as requested. A Punch ID is not proof of identity, so this login method is not suitable for sensitive production reports without an additional trusted verification step. Project and manpower changes require an administrator; report upload and download require a valid session, and archiving requires an administrator.
 
 ## PostgreSQL data layer
 
 Apply the schema and idempotent 54-person roster seed with `psql`:
 
 ```powershell
-psql "$env:DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f .\database\migrations\001_core.sql
+$env:MIGRATION_DATABASE_URL = "postgres://..."
+psql "$env:MIGRATION_DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f .\database\migrations\001_core.sql
 ```
+
+Apply the Drizzle-managed authentication tables after the core schema:
+
+```powershell
+npm run db:migrate
+npm run dev
+```
+
+The Drizzle auth schema is in `src/db/auth-schema.js`; the full ORM table definitions are in `src/db/schema.js`. Configuration is in `drizzle.config.js`, and generated migrations are stored in `database/drizzle`. Run migrations with the schema-owner URL. After changing the auth schema, generate and review a migration with `npm run db:generate`, then apply it with `npm run db:migrate`.
 
 Run the migration as a dedicated non-superuser database owner. The management functions are `SECURITY DEFINER`; do not make a superuser their owner.
 
@@ -44,6 +71,11 @@ After applying the migration, grant only the backend role access to the schema a
 CREATE ROLE cscfeed_app LOGIN;
 GRANT USAGE ON SCHEMA cscfeed TO cscfeed_app;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA cscfeed TO cscfeed_app;
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON cscfeed.accounts, cscfeed.auth_credentials, cscfeed.auth_sessions,
+     cscfeed.projects, cscfeed.reports
+  TO cscfeed_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA cscfeed TO cscfeed_app;
 ```
 
-Before calling account-aware functions, the server must validate the user's Punch ID with the trusted identity provider and set `cscfeed.actor_punch_id` transaction-locally. Never let a browser set that database context directly or expose database credentials to the client. The seed does not promote anyone to administrator; a trusted database operator must assign the initial admin after verifying the person's identity. Report rows store file metadata and a storage key, not file bytes—the server still needs to connect the uploader to private object storage.
+The API must set `cscfeed.actor_punch_id` transaction-locally before calling the legacy account-aware PL/pgSQL functions. Never let a browser set that database context directly or expose database credentials to the client. The API bootstraps the initial admin account on first startup; the SQL roster seed itself does not promote an employee. Report rows store file metadata and a storage key; the corresponding file bytes are kept under the configured local `UPLOAD_DIR`.

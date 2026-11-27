@@ -3,16 +3,15 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const authServerUrl = env.CONCORDERP_AUTH_URL || "http://127.0.0.1:5000";
+  const apiServerUrl = env.CSCFEED_API_URL || "http://127.0.0.1:5001";
 
   return {
     plugins: [react()],
     server: {
       proxy: {
-        "/api/auth": {
-          target: authServerUrl,
+        "/api": {
+          target: apiServerUrl,
           changeOrigin: true,
-          cookieDomainRewrite: "",
         },
       },
     },

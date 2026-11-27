@@ -1,0 +1,60 @@
+import { and, eq, gt } from "drizzle-orm";
+import { accounts, authCredentials, authSessions } from "../src/db/schema.js";
+import { HttpError, asyncRoute } from "./errors.js";
+import { createTokenHash } from "./session-cookie.js";
+
+export function readSessionToken(req) {
+  const prefix = "cscfeed_session=";
+  const part = (req.headers.cookie || "").split(";")
+    .map((cookie) => cookie.trim())
+    .find((cookie) => cookie.startsWith(prefix));
+  return part ? part.slice(prefix.length) : "";
+}
+
+export async function resolveIdentity(db, token) {
+  if (!token) return null;
+
+  const [record] = await db
+    .select({
+      id: accounts.id,
+      name: accounts.fullName,
+      role: accounts.accountRole,
+      punchId: accounts.punchId,
+      username: authCredentials.username,
+    })
+    .from(authSessions)
+    .innerJoin(accounts, eq(accounts.id, authSessions.accountId))
+    .leftJoin(authCredentials, eq(authCredentials.accountId, accounts.id))
+    .where(and(
+      eq(authSessions.tokenHash, createTokenHash(token)),
+      gt(authSessions.expiresAt, new Date()),
+      eq(accounts.active, true),
+    ))
+    .limit(1);
+
+  return record
+    ? {
+      id: Number(record.id),
+      name: record.name,
+      role: record.role,
+      username: record.username || record.punchId,
+      punchId: record.punchId,
+    }
+    : null;
+}
+
+export function requireIdentity(db) {
+  return asyncRoute(async (req, _res, next) => {
+    const identity = await resolveIdentity(db, readSessionToken(req));
+    if (!identity) throw new HttpError(401, "Sign in to continue.");
+    req.identity = identity;
+    next();
+  });
+}
+
+export function requireAdmin(req, _res, next) {
+  if (req.identity?.role !== "admin") {
+    return next(new HttpError(403, "Administrator access is required."));
+  }
+  return next();
+}

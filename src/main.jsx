@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Archive,
   ArrowDownToLine,
   ArrowUpRight,
   Bell,
@@ -23,16 +24,8 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
-import { initialManpower } from "./manpower";
 import Login from "./Login";
 import "./styles.css";
-
-const initialProjects = [
-  { id: "harbor", name: "Harbor Point Residences", shortName: "Harbor Point", color: "blue" },
-  { id: "northline", name: "Northline Logistics Hub", shortName: "Northline Hub", color: "orange" },
-  { id: "cedar", name: "Cedar Grove School", shortName: "Cedar Grove", color: "green" },
-  { id: "metro", name: "Metro West Utilities", shortName: "Metro West", color: "purple" },
-];
 
 function formatInputDate(date) {
   const year = date.getFullYear();
@@ -45,6 +38,31 @@ const today = formatInputDate(new Date());
 
 function formatDate(value) {
   return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(new Date(`${value}T12:00:00`));
+}
+
+async function apiRequest(url, { method = "GET", body } = {}) {
+  const headers = {};
+  const options = { method, credentials: "include", headers };
+  if (body instanceof FormData) {
+    options.body = body;
+  } else if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify(body);
+  }
+
+  const response = await fetch(url, options);
+  if (!(response.headers.get("content-type") || "").toLowerCase().includes("application/json")) {
+    throw new Error("The application API is unavailable.");
+  }
+  const result = await response.json();
+  if (!response.ok || result?.success !== true) {
+    throw new Error(typeof result?.message === "string" ? result.message : "The request could not be completed.");
+  }
+  return result;
+}
+
+function formatUploadLimit(bytes) {
+  return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
 }
 
 function App() {
@@ -114,13 +132,16 @@ function App() {
 
 function Workspace({ user, onLogout }) {
   const [activePage, setActivePage] = useState("Overview");
-  const [projects, setProjects] = useState(initialProjects);
-  const [manpower, setManpower] = useState(() => initialManpower.map((person) => ({ ...person, active: true })));
+  const [projects, setProjects] = useState([]);
+  const [manpower, setManpower] = useState([]);
   const [manpowerSearch, setManpowerSearch] = useState("");
   const [projectFilter, setProjectFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState("");
   const [reports, setReports] = useState([]);
+  const [isDataLoading, setIsDataLoading] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
+  const [maxUploadBytes, setMaxUploadBytes] = useState(512 * 1024 * 1024);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isProjectFormOpen, setIsProjectFormOpen] = useState(false);
   const [isManpowerFormOpen, setIsManpowerFormOpen] = useState(false);
@@ -134,13 +155,38 @@ function Workspace({ user, onLogout }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [form, setForm] = useState({ projectId: "", date: today, title: "", description: "" });
   const [selectedFile, setSelectedFile] = useState(null);
-  const [downloadableFiles, setDownloadableFiles] = useState({});
   const fileInput = useRef(null);
   const currentUser = user.name;
   const userInitials = currentUser.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
   const isAdministrator = user.role === "admin";
   const projectColors = ["blue", "orange", "green", "purple"];
   const projectOptions = [{ id: "all", name: "All projects" }, ...projects];
+
+  useEffect(() => {
+    let active = true;
+    const loadWorkspace = async () => {
+      try {
+        const [projectResult, reportResult, configResult] = await Promise.all([
+          apiRequest("/api/projects"),
+          apiRequest("/api/reports"),
+          apiRequest("/api/config"),
+        ]);
+        const manpowerResult = isAdministrator ? await apiRequest("/api/manpower") : null;
+        if (!active) return;
+        setProjects(projectResult.data);
+        setReports(reportResult.data);
+        setMaxUploadBytes(configResult.maxUploadBytes);
+        if (manpowerResult) setManpower(manpowerResult.data);
+      } catch (error) {
+        if (active) setNotice(error instanceof Error ? error.message : "Unable to load project data.");
+      } finally {
+        if (active) setIsDataLoading(false);
+      }
+    };
+
+    void loadWorkspace();
+    return () => { active = false; };
+  }, [isAdministrator]);
 
   const filteredReports = useMemo(() => reports.filter((report) => {
     const projectMatches = projectFilter === "all" || report.projectId === projectFilter;
@@ -169,7 +215,7 @@ function Workspace({ user, onLogout }) {
     setIsProjectFormOpen(true);
   };
 
-  const submitProject = (event) => {
+  const submitProject = async (event) => {
     event.preventDefault();
     if (!isAdministrator) return;
     const name = projectForm.name.trim();
@@ -182,24 +228,25 @@ function Workspace({ user, onLogout }) {
       return;
     }
 
-    const shortName = name.split(/\s+/).slice(0, 2).join(" ");
-    if (editingProject) {
-      setProjects((items) => items.map((project) => project.id === editingProject.id
-        ? { ...project, ...projectForm, name, shortName }
-        : project));
-      setNotice("Project details updated.");
-    } else {
-      const newProject = {
-        id: `project-${Date.now().toString(36)}`,
-        ...projectForm,
-        name,
-        shortName,
-      };
-      setProjects((items) => [...items, newProject]);
-      setNotice("Project added. You can now upload reports to it.");
+    try {
+      const result = await apiRequest(
+        editingProject ? `/api/projects/${editingProject.id}` : "/api/projects",
+        {
+          method: editingProject ? "PUT" : "POST",
+          body: { ...projectForm, name },
+        },
+      );
+      if (editingProject) {
+        setProjects((items) => items.map((project) => project.id === editingProject.id ? result.data : project));
+        setNotice("Project details updated.");
+      } else {
+        setProjects((items) => [...items, result.data].sort((a, b) => a.name.localeCompare(b.name)));
+        setNotice("Project added. You can now upload reports to it.");
+      }
+      setIsProjectFormOpen(false);
+    } catch (error) {
+      setProjectFormError(error instanceof Error ? error.message : "Unable to save the project.");
     }
-
-    setIsProjectFormOpen(false);
     window.setTimeout(() => setNotice(""), 5000);
   };
 
@@ -213,7 +260,7 @@ function Workspace({ user, onLogout }) {
     setIsManpowerFormOpen(true);
   };
 
-  const submitManpower = (event) => {
+  const submitManpower = async (event) => {
     event.preventDefault();
     if (!isAdministrator) return;
     const punchId = manpowerForm.punchId.trim();
@@ -232,59 +279,97 @@ function Workspace({ user, onLogout }) {
       return;
     }
 
-    if (editingManpower) {
-      setManpower((items) => items.map((person) => person.punchId === editingManpower.punchId
-        ? { ...person, punchId, name, designation }
-        : person));
-      setNotice("Manpower account updated.");
-    } else {
-      setManpower((items) => [...items, { punchId, name, designation, active: true }]);
-      setNotice("Manpower account added.");
+    try {
+      const result = await apiRequest(
+        editingManpower
+          ? `/api/manpower/${encodeURIComponent(editingManpower.punchId)}`
+          : "/api/manpower",
+        {
+          method: editingManpower ? "PUT" : "POST",
+          body: { punchId, name, designation },
+        },
+      );
+      if (editingManpower) {
+        setManpower((items) => items.map((person) => person.punchId === editingManpower.punchId ? result.data : person));
+        setNotice("Manpower account updated.");
+      } else {
+        setManpower((items) => [...items, result.data].sort((a, b) => a.name.localeCompare(b.name)));
+        setNotice("Manpower account added.");
+      }
+      setIsManpowerFormOpen(false);
+    } catch (error) {
+      setManpowerFormError(error instanceof Error ? error.message : "Unable to save the manpower account.");
     }
-    setIsManpowerFormOpen(false);
     window.setTimeout(() => setNotice(""), 5000);
   };
 
-  const toggleManpowerActive = (person) => {
+  const toggleManpowerActive = async (person) => {
     if (!isAdministrator) return;
-    setManpower((items) => items.map((item) => item.punchId === person.punchId
-      ? { ...item, active: !item.active }
-      : item));
-    setNotice(`${person.name} marked ${person.active ? "inactive" : "active"}. Changes are in this browser session only.`);
+    try {
+      const result = await apiRequest(`/api/manpower/${encodeURIComponent(person.punchId)}/active`, {
+        method: "PATCH",
+        body: { active: !person.active },
+      });
+      setManpower((items) => items.map((item) => item.punchId === person.punchId ? result.data : item));
+      setNotice(`${person.name} marked ${person.active ? "inactive" : "active"}.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to update the manpower account.");
+    }
     window.setTimeout(() => setNotice(""), 5000);
   };
 
-  const submitReport = (event) => {
+  const submitReport = async (event) => {
     event.preventDefault();
     if (!selectedFile) return;
-    const extension = selectedFile.name.split(".").pop()?.toUpperCase() || "FILE";
-    const newReport = {
-      id: Date.now(),
-      ...form,
-      user: currentUser,
-      fileName: selectedFile.name,
-      fileSize: `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`,
-      type: extension,
-    };
-    setReports((items) => [newReport, ...items]);
-    setDownloadableFiles((items) => ({ ...items, [newReport.id]: selectedFile }));
-    setProjectFilter(form.projectId);
-    setIsUploadOpen(false);
-    setNotice("Report added to this session. Connect storage to share it with your team.");
+    if (selectedFile.size > maxUploadBytes) {
+      setNotice(`Choose a file smaller than ${formatUploadLimit(maxUploadBytes)}.`);
+      return;
+    }
+
+    const body = new FormData();
+    body.append("projectId", form.projectId);
+    body.append("reportDate", form.date);
+    body.append("title", form.title);
+    body.append("description", form.description);
+    body.append("file", selectedFile);
+
+    setIsUploading(true);
+    try {
+      const result = await apiRequest("/api/reports", { method: "POST", body });
+      setReports((items) => [result.data, ...items]);
+      setProjectFilter(form.projectId);
+      setIsUploadOpen(false);
+      setSelectedFile(null);
+      setNotice(result.notification === "failed"
+        ? "Report was uploaded, but its email notification failed."
+        : "Report uploaded and shared with the project.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to upload the report.");
+    } finally {
+      setIsUploading(false);
+    }
     window.setTimeout(() => setNotice(""), 5000);
   };
 
   const downloadReport = (report) => {
-    const file = downloadableFiles[report.id];
-    if (!file) return;
-    const url = URL.createObjectURL(file);
     const link = document.createElement("a");
-    link.href = url;
+    link.href = `/api/reports/${encodeURIComponent(report.id)}/file`;
     link.download = report.fileName;
     document.body.appendChild(link);
     link.click();
     link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const archiveReport = async (report) => {
+    if (!isAdministrator || !window.confirm(`Archive "${report.title}"?`)) return;
+    try {
+      await apiRequest(`/api/reports/${encodeURIComponent(report.id)}/archive`, { method: "POST" });
+      setReports((items) => items.filter((item) => item.id !== report.id));
+      setNotice("Report archived.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to archive the report.");
+    }
+    window.setTimeout(() => setNotice(""), 5000);
   };
 
   const navigate = (page) => {
@@ -355,7 +440,9 @@ function Workspace({ user, onLogout }) {
         </header>
 
         <div className="page-content">
-          {activePage === "Manpower" && isAdministrator ? (
+          {isDataLoading ? (
+            <div className="auth-loading" role="status">Loading workspace data…</div>
+          ) : activePage === "Manpower" && isAdministrator ? (
             <ManpowerPage people={filteredManpower} total={manpower.length} query={manpowerSearch} onSearch={setManpowerSearch} onAdd={() => openManpowerForm()} onEdit={openManpowerForm} onToggleActive={toggleManpowerActive} />
           ) : activePage === "Projects" ? (
             <ProjectsPage
@@ -406,7 +493,10 @@ function Workspace({ user, onLogout }) {
                           <td><span className="uploader"><span className="mini-avatar">{report.user.split(" ").map((part) => part[0]).join("")}</span>{report.user}</span></td>
                           <td className="date-cell">{formatDate(report.date)}</td>
                           <td><span className="file-meta"><span>{report.type}</span>{report.fileSize}</span></td>
-                          <td><button className="download-button" aria-label={`Download ${report.fileName}`} title={downloadableFiles[report.id] ? "Download file" : "File storage will be connected"} disabled={!downloadableFiles[report.id]} onClick={() => downloadReport(report)}><ArrowDownToLine size={17} /></button></td>
+                          <td><div className="report-actions">
+                            <button className="download-button" aria-label={`Download ${report.fileName}`} title="Download file" onClick={() => downloadReport(report)}><ArrowDownToLine size={17} /></button>
+                            {isAdministrator && <button className="download-button" aria-label={`Archive ${report.title}`} title="Archive report" onClick={() => archiveReport(report)}><Archive size={16} /></button>}
+                          </div></td>
                         </tr>;
                       })}
                       {filteredReports.length === 0 && <tr><td className="empty-state" colSpan="6"><span className="empty-icon"><File size={20} /></span><strong>No reports found</strong><span>Try changing your filters or upload a new report.</span><button className="button button-secondary" onClick={openUpload}><Plus size={16} /> Upload a report</button></td></tr>}
@@ -416,7 +506,7 @@ function Workspace({ user, onLogout }) {
                 <div className="table-footer"><span>Showing <strong>{filteredReports.length}</strong> of <strong>{reports.length}</strong> reports</span><span className="table-footer-note"><UsersRound size={15} /> Shared workspace</span></div>
               </section>
 
-              <div className="integration-note"><ShieldCheck size={17} /><span><strong>One login for every project.</strong> Punch ID sign-in and shared cloud storage will be connected during setup.</span><button onClick={() => setNotice("Punch ID single sign-on will be configured for your organization.")}>Learn more <ArrowUpRight size={14} /></button></div>
+              <div className="integration-note"><ShieldCheck size={17} /><span><strong>One login for every project.</strong> Reports are stored on this server and shared with authenticated project users.</span><button onClick={() => setNotice("Email notifications can be configured by the administrator.")}>Notifications <ArrowUpRight size={14} /></button></div>
             </>
           )}
         </div>
@@ -441,12 +531,12 @@ function Workspace({ user, onLogout }) {
               <div role="button" tabIndex="0" aria-label="Choose or drop a report file" className={`drop-zone ${selectedFile ? "drop-zone-selected" : ""}`} onClick={() => fileInput.current?.click()} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); fileInput.current?.click(); } }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setSelectedFile(event.dataTransfer.files[0] || null); }}>
                 <span className="drop-icon">{selectedFile ? <Check size={19} /> : <Upload size={19} />}</span>
                 <strong>{selectedFile ? selectedFile.name : "Choose a file or drag it here"}</strong>
-                <small>{selectedFile ? `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB · Ready to upload` : "PDF, Word, Excel, CSV, or image · Max 25 MB"}</small>
+                <small>{selectedFile ? `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB · Ready to upload` : `Technical files supported · Max ${formatUploadLimit(maxUploadBytes)}`}</small>
               </div>
-              <input ref={fileInput} className="sr-only" aria-label="Choose a report file" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} />
-              {selectedFile && selectedFile.size > 25 * 1024 * 1024 && <span className="field-error" role="alert">Please choose a file smaller than 25 MB.</span>}
+              <input ref={fileInput} className="sr-only" aria-label="Choose a report file" type="file" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} />
+              {selectedFile && selectedFile.size > maxUploadBytes && <span className="field-error" role="alert">Please choose a file smaller than {formatUploadLimit(maxUploadBytes)}.</span>}
             </div>
-            <div className="modal-footer"><span><ShieldCheck size={15} /> Visible to project members</span><div><button type="button" className="button button-secondary" onClick={() => setIsUploadOpen(false)}>Cancel</button><button type="submit" className="button button-primary" disabled={!selectedFile || selectedFile.size > 25 * 1024 * 1024}><Upload size={16} /> Add report</button></div></div>
+            <div className="modal-footer"><span><ShieldCheck size={15} /> Visible to signed-in users</span><div><button type="button" className="button button-secondary" onClick={() => setIsUploadOpen(false)} disabled={isUploading}>Cancel</button><button type="submit" className="button button-primary" disabled={!selectedFile || selectedFile.size > maxUploadBytes || isUploading}><Upload size={16} /> {isUploading ? "Uploading…" : "Add report"}</button></div></div>
           </form>
         </section>
       </div>}

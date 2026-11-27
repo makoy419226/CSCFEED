@@ -163,6 +163,7 @@ tbody tr:hover:not(:has(.empty-state)) { background: #fbfcfe; }
 .download-button { display: grid; width: 29px; height: 29px; place-items: center; border: 1px solid #e9edf2; border-radius: 6px; color: #6380a9; background: white; }
 .download-button:disabled { cursor: not-allowed; opacity: .42; }
 .download-button:not(:disabled):hover { border-color: #c6d9f6; color: #2874e8; background: #f4f8ff; }
+.report-actions { display: flex; gap: 6px; }
 .table-footer { display: flex; min-height: 40px; align-items: center; justify-content: space-between; padding: 0 19px; border-top: 1px solid #edf0f4; color: #929dad; font-size: 10px; }
 .table-footer strong { color: #69768a; font-weight: 600; }
 .table-footer-note { display: flex; align-items: center; gap: 5px; }
