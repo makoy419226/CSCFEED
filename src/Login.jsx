@@ -48,7 +48,8 @@ export default function Login({ onLogin, serviceMessage = "" }) {
       });
 
       if (!isJsonResponse(response)) {
-        throw new Error("The authentication service is unavailable. Reports remain locked.");
+        // Vite answers with a non-JSON error when the API process is not running.
+        throw new Error("The CSC Feed API is not running, so sign-in is unavailable. Restart with npm run dev and check the [api] lines in that terminal for an error.");
       }
 
       const result = await response.json();

@@ -8,7 +8,7 @@ import { createProjectsRouter } from "./routes/projects.js";
 import { createReportsRouter } from "./routes/reports.js";
 import { handleError, HttpError } from "./errors.js";
 
-export function createApp({ db, ready, maxUploadBytes }) {
+export function createApp({ db, ready, startupError = () => null, maxUploadBytes }) {
   const app = express();
   const isProduction = process.env.NODE_ENV === "production";
 
@@ -21,12 +21,13 @@ export function createApp({ db, ready, maxUploadBytes }) {
   app.use(express.json({ limit: "10kb" }));
 
   app.get("/api/health", (_req, res) => {
-    res.status(ready() ? 200 : 503).json({ ready: ready() });
+    const error = isProduction ? null : startupError();
+    res.status(ready() ? 200 : 503).json({ ready: ready(), ...(error ? { error } : {}) });
   });
   app.get("/api/config", (_req, res) => {
     res.json({ success: true, maxUploadBytes });
   });
-  app.use("/api/auth", createAuthRouter({ db, ready }));
+  app.use("/api/auth", createAuthRouter({ db, ready, startupError: isProduction ? () => null : startupError }));
 
   const requireReady = (_req, _res, next) => {
     if (!ready()) return next(new HttpError(503, "Application data is unavailable until PostgreSQL and migrations are ready."));

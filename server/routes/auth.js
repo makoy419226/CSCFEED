@@ -29,14 +29,17 @@ const profileUpdateLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-export function createAuthRouter({ db, ready }) {
+export function createAuthRouter({ db, ready, startupError = () => null }) {
   const router = express.Router();
 
   router.use((_req, res, next) => {
     if (!ready()) {
+      const reason = startupError();
       return res.status(503).json({
         success: false,
-        message: "Authentication database is unavailable. Configure PostgreSQL and apply the database migrations.",
+        message: reason
+          ? `The API could not start: ${reason}. Fix it, then restart with npm run dev.`
+          : "Authentication database is unavailable. Configure PostgreSQL and apply the database migrations.",
       });
     }
     return next();

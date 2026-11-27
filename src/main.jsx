@@ -388,7 +388,7 @@ function App() {
         const response = await fetch("/api/auth/session", { credentials: "include" });
         if (response.status === 401) return;
         if (!(response.headers.get("content-type") || "").toLowerCase().includes("application/json")) {
-          throw new Error("The authentication service is unavailable. Reports remain locked.");
+          throw new Error("The CSC Feed API is not running, so sign-in is unavailable. Restart with npm run dev and check the [api] lines in that terminal for an error.");
         }
 
         const result = await response.json();
