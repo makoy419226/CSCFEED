@@ -789,15 +789,16 @@ function Workspace({ user, onLogout, onUserUpdated }) {
   };
 
   const toggleProjectManagerAccess = async (person) => {
-    if (!isSuperUser || updatingProjectManagerAccessPunchId || person.adminAccess) return;
+    if (!isSuperUser || updatingProjectManagerAccessPunchId || person.adminAccess) return false;
     const appoint = !person.isProjectManager;
     const assignedProjects = person.projectManagerProjects || [];
     const prompt = appoint
       ? `Appoint ${person.name} as a Project Manager? You can then assign them to one or more projects.`
       : `Remove Project Manager appointment from ${person.name}? This also removes their assignments to ${assignedProjects.length} project${assignedProjects.length === 1 ? "" : "s"}.`;
-    if (!window.confirm(prompt)) return;
+    if (!window.confirm(prompt)) return false;
 
     setUpdatingProjectManagerAccessPunchId(person.punchId);
+    let succeeded = false;
     try {
       const result = await apiRequest(`/api/manpower/${encodeURIComponent(person.punchId)}/project-manager-access`, {
         method: "PATCH",
@@ -812,12 +813,14 @@ function Workspace({ user, onLogout, onUserUpdated }) {
         }
       }
       setNotice(`${person.name} ${appoint ? "appointed as Project Manager" : "Project Manager appointment removed"}.`);
+      succeeded = true;
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Unable to update Project Manager appointment.");
     } finally {
       setUpdatingProjectManagerAccessPunchId(null);
     }
     window.setTimeout(() => setNotice(""), 5000);
+    return succeeded;
   };
 
   const appointProjectManager = async (project, managerPunchId) => {
@@ -865,6 +868,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
     }
 
     let profileSaved = false;
+    let accountCreated = false;
     try {
       const result = await apiRequest(
         editingManpower
@@ -911,13 +915,27 @@ function Workspace({ user, onLogout, onUserUpdated }) {
         setManpower((items) => items.map((person) => person.punchId === updatedAccount.punchId ? updatedAccount : person));
         setNotice(isSuperUser ? "Manpower account and project assignments updated." : "Manpower account updated.");
       } else {
+        accountCreated = true;
         setManpower((items) => [...items, result.data].sort((a, b) => a.name.localeCompare(b.name)));
-        setNotice("Manpower account added.");
+        if (isSuperUser && manpowerForm.projectId) {
+          setEditingManpower(result.data);
+          const assignment = await apiRequest(`/api/manpower/${encodeURIComponent(result.data.punchId)}/project`, {
+            method: "PATCH",
+            body: { projectId: Number(manpowerForm.projectId) },
+          });
+          const updatedAccount = { ...result.data, ...assignment.data };
+          setManpower((items) => items.map((person) => person.punchId === updatedAccount.punchId ? updatedAccount : person));
+          setNotice("Manpower account added and assigned to project.");
+        } else {
+          setNotice("Manpower account added.");
+        }
       }
       setIsManpowerFormOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to save the manpower account.";
-      setManpowerFormError(profileSaved
+      setManpowerFormError(accountCreated
+        ? `Account was added, but its project assignment could not be updated: ${message}`
+        : profileSaved
         ? `Account details were saved, but project assignments could not be updated: ${message}`
         : message);
     }
@@ -1754,14 +1772,20 @@ function Workspace({ user, onLogout, onUserUpdated }) {
             <label className="form-label">Designation <span className="required">*</span>
               <input required maxLength="100" placeholder="Enter designation" value={manpowerForm.designation} onChange={(event) => setManpowerForm({ ...manpowerForm, designation: event.target.value })} />
             </label>
-            {editingManpower && canEditProjectAssignments && !editingManpower.adminAccess && !editingManpower.isProjectManager && <label className="form-label">Assigned project
+            {!editingManpower && isSuperUser && <label className="form-label">Assigned project <span className="optional">(optional)</span>
+              <select value={manpowerForm.projectId} onChange={(event) => { setManpowerForm({ ...manpowerForm, projectId: event.target.value }); setManpowerFormError(""); }}>
+                <option value="">Unassigned</option>
+                {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+              </select>
+            </label>}
+            {editingManpower && isSuperUser && !editingManpower.adminAccess && !editingManpower.isProjectManager && <label className="form-label">Assigned project
               <select value={manpowerForm.projectId} onChange={(event) => { setManpowerForm({ ...manpowerForm, projectId: event.target.value }); setManpowerFormError(""); }}>
                 <option value="">Unassigned</option>
                 {manpowerForm.projectId && !projects.some((project) => project.id === manpowerForm.projectId) && <option value={manpowerForm.projectId}>{editingManpower.projectName || "Current project"} (inactive)</option>}
                 {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
               </select>
             </label>}
-            {editingManpower && canEditProjectAssignments && editingManpower.isProjectManager && <fieldset className="manager-project-selection" disabled={!editingManpower.active}>
+            {editingManpower && isSuperUser && editingManpower.isProjectManager && <fieldset className="manager-project-selection" disabled={!editingManpower.active}>
               <legend>Projects managed</legend>
               <p>Choose one or more active projects. Each project can have one Project Manager.</p>
               {projects.length ? <div className="manager-project-options">
@@ -1783,14 +1807,25 @@ function Workspace({ user, onLogout, onUserUpdated }) {
                           return { ...current, projectManagerProjectIds: [...selectedIds] };
                         });
                       }}
-                    />
-                    <span>{project.name}</span>
-                    {assignedElsewhere && <small>Assigned to {project.managerName || "another manager"}</small>}
-                  </label>;
+                      />
+                      <span>{project.name}</span>
+                      {assignedElsewhere && <small>Assigned to {project.managerName || "another manager"}</small>}
+                    </label>;
                 })}
               </div> : <span className="field-hint">There are no active projects.</span>}
               {!editingManpower.active && <span className="field-hint">Reactivate this account before assigning projects.</span>}
             </fieldset>}
+            {editingManpower && isSuperUser && editingManpower.isProjectManager && <button
+              type="button"
+              className="button button-danger"
+              disabled={Boolean(updatingProjectManagerAccessPunchId)}
+              onClick={async () => {
+                if (await toggleProjectManagerAccess(editingManpower)) {
+                  setIsManpowerFormOpen(false);
+                  setEditingManpower(null);
+                }
+              }}
+            >Remove Project Manager appointment</button>}
             {manpowerFormError && <p className="field-error" role="alert">{manpowerFormError}</p>}
             <div className="modal-footer">
               <span><ShieldCheck size={15} /> Punch ID authentication requires server setup</span>
