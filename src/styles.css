@@ -291,6 +291,7 @@ tbody tr:hover:not(:has(.empty-state)) { background: #fbfcfe; }
 .manpower-table td { height: 52px; }
 .manpower-transfer-button { min-height: 29px; gap: 4px; padding: 0 7px; font-size: 9px; white-space: nowrap; }
 .project-manager-badge { display: inline-block; overflow: hidden; max-width: 190px; padding: 4px 8px; border: 1px solid var(--brand-blue-border); border-radius: 5px; color: var(--brand-action); background: var(--brand-blue-soft); font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.project-manager-assign-button { min-height: 28px; padding: 0 7px; border: 1px solid var(--brand-blue-border); border-radius: 5px; background: var(--brand-blue-soft); font-size: 10px; }
 .project-manager-none { color: #a3adbb; font-size: 11px; }
 .field-hint { display: block; margin-top: 5px; color: #8793a5; font-size: 10px; font-weight: 400; }
 .employee-report-log-modal { width: min(100%, 840px); }

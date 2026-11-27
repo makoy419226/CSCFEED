@@ -455,6 +455,10 @@ function Workspace({ user, onLogout, onUserUpdated }) {
   const [transferPerson, setTransferPerson] = useState(null);
   const [transferProjectId, setTransferProjectId] = useState("");
   const [transferProjectError, setTransferProjectError] = useState("");
+  const [projectManagerPerson, setProjectManagerPerson] = useState(null);
+  const [projectManagerProjectId, setProjectManagerProjectId] = useState("");
+  const [projectManagerError, setProjectManagerError] = useState("");
+  const [assigningProjectManagerPunchId, setAssigningProjectManagerPunchId] = useState(null);
   const [reportLogPerson, setReportLogPerson] = useState(null);
   const [employeeReports, setEmployeeReports] = useState([]);
   const [isEmployeeReportsLoading, setIsEmployeeReportsLoading] = useState(false);
@@ -1116,6 +1120,50 @@ function Workspace({ user, onLogout, onUserUpdated }) {
     window.setTimeout(() => setNotice(""), 5000);
   };
 
+  const openProjectManagerAssignment = (person) => {
+    if (!isSuperUser || !person.active || person.adminAccess) return;
+    const availableProjects = projects.filter((project) =>
+      !project.managerPunchId || project.managerPunchId === person.punchId,
+    );
+    setProjectManagerPerson(person);
+    setProjectManagerProjectId(
+      availableProjects.some((project) => project.id === person.projectManagerProjectId)
+        ? person.projectManagerProjectId
+        : availableProjects[0]?.id || "",
+    );
+    setProjectManagerError("");
+  };
+
+  const assignProjectManager = async (event) => {
+    event.preventDefault();
+    if (!isSuperUser || !projectManagerPerson || !projectManagerProjectId || assigningProjectManagerPunchId) return;
+    if (projectManagerPerson.projectManagerProjectId
+      && projectManagerPerson.projectManagerProjectId !== projectManagerProjectId
+      && !window.confirm(`${projectManagerPerson.name} currently manages ${projectManagerPerson.projectManagerProjectName}. Assign them to another project and remove their current Project Manager assignment?`)) {
+      return;
+    }
+
+    setAssigningProjectManagerPunchId(projectManagerPerson.punchId);
+    setProjectManagerError("");
+    try {
+      const result = await apiRequest(`/api/manpower/${encodeURIComponent(projectManagerPerson.punchId)}/project-manager`, {
+        method: "PATCH",
+        body: { projectId: Number(projectManagerProjectId) },
+      });
+      setManpower((items) => items.map((person) => person.punchId === result.data.punchId
+        ? { ...person, ...result.data }
+        : person));
+      syncProjectManager(projectManagerPerson.punchId, result.data);
+      setNotice(`${result.data.name} assigned as Project Manager for ${result.data.projectManagerProjectName}.`);
+      setProjectManagerPerson(null);
+    } catch (error) {
+      setProjectManagerError(error instanceof Error ? error.message : "Unable to assign this Project Manager.");
+    } finally {
+      setAssigningProjectManagerPunchId(null);
+    }
+    window.setTimeout(() => setNotice(""), 5000);
+  };
+
   const deleteProject = async (project) => {
     if (!isAdministrator) return;
     const reportCount = Number(project.reportCount ?? 0);
@@ -1272,6 +1320,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
               canManageAdminAccess={isSuperUser}
               canDeleteAccounts={isSuperUser}
               canTransferProjects={isSuperUser}
+              canAssignProjectManagers={isSuperUser}
               updatingAdminAccessPunchId={updatingAdminAccessPunchId}
               deletingManpowerPunchId={deletingManpowerPunchId}
               transferringManpowerPunchId={transferringManpowerPunchId}
@@ -1282,6 +1331,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
               onToggleAdminAccess={toggleManpowerAdminAccess}
               onDeletePerson={deleteManpowerAccount}
               onTransferPerson={openProjectTransfer}
+              onAssignProjectManager={openProjectManagerAssignment}
               onViewReports={openEmployeeReportLog}
             />
           ) : activePage === "Settings" && isSuperUser ? (
@@ -1701,6 +1751,40 @@ function Workspace({ user, onLogout, onUserUpdated }) {
           </form>
         </section>
       </div>}
+      {projectManagerPerson && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !assigningProjectManagerPunchId) setProjectManagerPerson(null); }}>
+        <section className="upload-modal project-modal" role="dialog" aria-modal="true" aria-labelledby="project-manager-assignment-title">
+          <div className="modal-heading">
+            <div>
+              <span className="modal-icon"><ShieldCheck size={19} /></span>
+              <div><h2 id="project-manager-assignment-title">Assign Project Manager</h2><p>{projectManagerPerson.name} · Punch ID {projectManagerPerson.punchId}</p></div>
+            </div>
+            <button className="icon-button" aria-label="Close Project Manager assignment" disabled={Boolean(assigningProjectManagerPunchId)} onClick={() => setProjectManagerPerson(null)}><X size={19} /></button>
+          </div>
+          <form onSubmit={assignProjectManager}>
+            {(() => {
+              const availableProjects = projects.filter((project) =>
+                !project.managerPunchId || project.managerPunchId === projectManagerPerson.punchId,
+              );
+              return availableProjects.length ? <label className="form-label">Available project
+                <select autoFocus required value={projectManagerProjectId} onChange={(event) => { setProjectManagerProjectId(event.target.value); setProjectManagerError(""); }}>
+                  {availableProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                </select>
+              </label> : <p className="field-hint">There are no active projects without an assigned Project Manager.</p>;
+            })()}
+            <p className="field-hint">Only active employees can manage a project. Projects already assigned to another Project Manager are not available.</p>
+            {projectManagerError && <p className="field-error" role="alert">{projectManagerError}</p>}
+            <div className="modal-footer">
+              <span><ShieldCheck size={15} /> Super User assignment</span>
+              <div>
+                <button type="button" className="button button-secondary" disabled={Boolean(assigningProjectManagerPunchId)} onClick={() => setProjectManagerPerson(null)}>Cancel</button>
+                <button type="submit" className="button button-primary" disabled={Boolean(assigningProjectManagerPunchId) || !projectManagerProjectId}>
+                  <Check size={16} /> {assigningProjectManagerPunchId ? "Assigning…" : "Assign to project"}
+                </button>
+              </div>
+            </div>
+          </form>
+        </section>
+      </div>}
     </div>
   );
 }
@@ -1826,6 +1910,7 @@ function ManpowerPage({
   canManageAdminAccess,
   canDeleteAccounts,
   canTransferProjects,
+  canAssignProjectManagers,
   updatingAdminAccessPunchId,
   deletingManpowerPunchId,
   transferringManpowerPunchId,
@@ -1836,6 +1921,7 @@ function ManpowerPage({
   onToggleAdminAccess,
   onDeletePerson,
   onTransferPerson,
+  onAssignProjectManager,
   onViewReports,
 }) {
   return <section className="manpower-page">
@@ -1892,8 +1978,10 @@ function ManpowerPage({
               </td>
               <td>
                 {person.projectManagerProjectName
-                  ? <span className="project-manager-badge" title="Change from Projects → Edit project">{person.projectManagerProjectName}</span>
-                  : <span className="project-manager-none">—</span>}
+                  ? <span className="project-manager-badge" title="Assigned Project Manager">{person.projectManagerProjectName}</span>
+                  : canAssignProjectManagers && person.active && !person.adminAccess
+                    ? <button type="button" className="text-button project-manager-assign-button" aria-label={`Assign ${person.name} as Project Manager`} onClick={() => onAssignProjectManager(person)}>Assign</button>
+                    : <span className="project-manager-none">—</span>}
               </td>
               <td>
                 {person.adminAccess

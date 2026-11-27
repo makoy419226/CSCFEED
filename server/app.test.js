@@ -40,3 +40,28 @@ test("the login limiter accepts forwarded IPs from the local development proxy",
     });
   }
 });
+
+test("unknown Express routes return an Express-specific not-found message", async () => {
+  const app = createApp({
+    db: {},
+    ready: () => true,
+    maxUploadBytes: 1024,
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+
+  try {
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/not-a-route`);
+
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), {
+      success: false,
+      message: "Express route not found.",
+    });
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+  }
+});

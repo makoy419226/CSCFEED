@@ -37,7 +37,7 @@ export function createApp({ db, ready, startupError = () => null, maxUploadBytes
   app.use("/api/manpower", requireReady, createManpowerRouter({ db }));
   app.use("/api/reports", requireReady, createReportsRouter({ db, maxUploadBytes }));
   app.use("/api", (_req, res) => {
-    res.status(404).json({ success: false, message: "API route not found." });
+    res.status(404).json({ success: false, message: "Express route not found." });
   });
   app.use(handleError);
 
