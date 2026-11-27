@@ -56,9 +56,11 @@ export const projectManagerAppointmentSchema = z.object({
   punchId: employeePunchId.nullable(),
 }).strict();
 
-export const projectManagerAssignmentSchema = z.object({
+export const projectMembershipSchema = z.object({
   projectId: positiveId.nullable(),
 }).strict();
+
+export const projectManagerAssignmentSchema = projectMembershipSchema;
 
 export const reportQuerySchema = z.object({
   projectId: positiveId.optional(),

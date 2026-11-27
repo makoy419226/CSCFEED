@@ -54,13 +54,13 @@ function createDb(role, target = null) {
   return db;
 }
 
-function createAssignmentDb(target, destination, currentAssignment = null) {
+function createAssignmentDb(target, destination, currentAssignment = null, role = "super_admin") {
   const updates = [];
   let projectSelectCount = 0;
   const identity = {
     id: 2,
-    name: "Appointed Admin",
-    role: "admin",
+    name: role === "super_admin" ? "Super User" : "Appointed Admin",
+    role,
     punchId: "1234",
     username: "admin",
     projectManagerProjectId: null,
@@ -90,6 +90,56 @@ function createAssignmentDb(target, destination, currentAssignment = null) {
             async where() {
               updates.push({ table, values });
               return [];
+            },
+          };
+        },
+      };
+    },
+  };
+
+  return {
+    updates,
+    select() {
+      return {
+        from() { return this; },
+        innerJoin() { return this; },
+        leftJoin() { return this; },
+        where() { return this; },
+        async limit() { return [identity]; },
+      };
+    },
+    async transaction(callback) { return callback(tx); },
+  };
+}
+
+function createProjectTransferDb({ target, destination = null, currentManager = null, role = "super_admin" }) {
+  const updates = [];
+  const identity = {
+    id: 2,
+    name: role === "super_admin" ? "Super User" : "Appointed Admin",
+    role,
+    punchId: role === "super_admin" ? "0000" : "1234",
+    username: role,
+  };
+  const tx = {
+    select() {
+      let table;
+      return {
+        from(value) { table = value; return this; },
+        where() { return this; },
+        async for() {
+          if (table === accounts) return target ? [target] : [];
+          return destination ? [destination] : [];
+        },
+        async limit() { return currentManager ? [currentManager] : []; },
+      };
+    },
+    update(table) {
+      return {
+        set(values) {
+          return {
+            async where() {
+              updates.push({ table, values });
             },
           };
         },
@@ -235,6 +285,88 @@ test("a project with another assigned manager cannot be reassigned", async () =>
 
     assert.equal(response.status, 409);
     assert.equal((await response.json()).message, "This project already has an assigned manager.");
+  });
+
+  assert.equal(db.updates.length, 0);
+});
+
+test("appointed admins cannot use the per-employee Project Manager route", async () => {
+  const db = createAssignmentDb({ ...employeeAccount }, { id: 5, name: "Project A", managerId: null }, null, "admin");
+
+  await withManpowerApp(db, async (patch) => {
+    const response = await patch("/2468/project-manager", { projectId: 5 });
+
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).message, "Super User access is required.");
+  });
+
+  assert.equal(db.updates.length, 0);
+});
+
+test("the Super User can transfer an employee to an active project", async () => {
+  const db = createProjectTransferDb({
+    target: { ...employeeAccount, projectId: 2 },
+    destination: { id: 5, name: "Project B" },
+  });
+
+  await withManpowerApp(db, async (patch) => {
+    const response = await patch("/2468/project", { projectId: 5 });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.data.projectId, "5");
+    assert.equal(body.data.projectName, "Project B");
+    assert.equal(body.data.projectManagerProjectId, null);
+  });
+
+  assert.deepEqual(db.updates, [{ table: accounts, values: { projectId: 5 } }]);
+});
+
+test("the Super User can remove an employee's project assignment", async () => {
+  const db = createProjectTransferDb({
+    target: { ...employeeAccount, projectId: 5 },
+  });
+
+  await withManpowerApp(db, async (patch) => {
+    const response = await patch("/2468/project", { projectId: null });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.data.projectId, null);
+    assert.equal(body.data.projectName, null);
+  });
+
+  assert.deepEqual(db.updates, [{ table: accounts, values: { projectId: null } }]);
+});
+
+test("appointed admins cannot transfer employees between projects", async () => {
+  const db = createProjectTransferDb({
+    target: { ...employeeAccount, projectId: null },
+    destination: { id: 5, name: "Project B" },
+    role: "admin",
+  });
+
+  await withManpowerApp(db, async (patch) => {
+    const response = await patch("/2468/project", { projectId: 5 });
+
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).message, "Super User access is required.");
+  });
+
+  assert.equal(db.updates.length, 0);
+});
+
+test("the Super User account cannot be transferred", async () => {
+  const db = createProjectTransferDb({
+    target: { ...employeeAccount, punchId: "0000", accountRole: "super_admin" },
+    destination: { id: 5, name: "Project B" },
+  });
+
+  await withManpowerApp(db, async (patch) => {
+    const response = await patch("/0000/project", { projectId: 5 });
+
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).message, "Employee account not found.");
   });
 
   assert.equal(db.updates.length, 0);

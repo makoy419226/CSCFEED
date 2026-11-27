@@ -20,12 +20,14 @@ export const accounts = cscfeed.table("accounts", {
   designation: text("designation").notNull().default(""),
   accountRole: text("account_role").notNull().default("employee"),
   active: boolean("active").notNull().default(true),
+  projectId: bigint("project_id", { mode: "number" }).references(() => projects.id, { onDelete: "set null" }),
   externalSubject: text("external_subject"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("accounts_punch_id_unique").on(table.punchId),
   uniqueIndex("accounts_external_subject_unique").on(table.externalSubject),
+  index("accounts_project_id_idx").on(table.projectId),
 ]);
 
 export const projects = cscfeed.table("projects", {

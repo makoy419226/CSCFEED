@@ -2,7 +2,7 @@ import express from "express";
 import { and, eq, ne, sql } from "drizzle-orm";
 import { accounts, projects, reports } from "../../src/db/schema.js";
 import { asyncRoute, HttpError } from "../errors.js";
-import { hasAdminAccess, requireAdmin, requireIdentity, superUserRole } from "../identity.js";
+import { hasAdminAccess, requireAdmin, requireIdentity, requireSuperUser, superUserRole } from "../identity.js";
 import { projectManagerAppointmentSchema, projectSchema, idParamsSchema } from "../schemas.js";
 import { validate } from "../validation.js";
 
@@ -69,7 +69,7 @@ export function createProjectsRouter({ db, ready }) {
     return res.json({ success: true, data: toProject(project) });
   }));
 
-  router.patch("/:id/manager", requireAdmin, validate(idParamsSchema, "params"), validate(projectManagerAppointmentSchema), asyncRoute(async (req, res) => {
+  router.patch("/:id/manager", requireSuperUser, validate(idParamsSchema, "params"), validate(projectManagerAppointmentSchema), asyncRoute(async (req, res) => {
     const projectId = req.validated.params.id;
     const { punchId } = req.validated.body;
     try {

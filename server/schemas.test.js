@@ -5,6 +5,7 @@ import {
   manpowerAdminAccessSchema,
   manpowerSchema,
   projectManagerAssignmentSchema,
+  projectMembershipSchema,
   reportBulkDeleteSchema,
   reportEditSchema,
   reportFormSchema,
@@ -37,6 +38,12 @@ test("Project Manager assignments accept one positive project id or an explicit 
   assert.equal(projectManagerAssignmentSchema.safeParse({ projectId: "4" }).success, true);
   assert.equal(projectManagerAssignmentSchema.safeParse({ projectId: null }).success, true);
   assert.equal(projectManagerAssignmentSchema.safeParse({ projectId: 0 }).success, false);
+});
+
+test("employee project transfers accept one positive project id or an explicit unassignment", () => {
+  assert.equal(projectMembershipSchema.safeParse({ projectId: "4" }).success, true);
+  assert.equal(projectMembershipSchema.safeParse({ projectId: null }).success, true);
+  assert.equal(projectMembershipSchema.safeParse({ projectId: 0 }).success, false);
 });
 
 test("report edits validate details and attachment removal inputs", () => {

@@ -75,9 +75,9 @@ test("project deletion returns not found for an unknown project", async () => {
   assert.deepEqual(await response.json(), { success: false, message: "Project not found." });
 });
 
-function createManagerDb({ project, manager, previous = null }) {
+function createManagerDb({ project, manager, previous = null, role = "super_admin" }) {
   const updates = [];
-  const identity = { id: 1, name: "Administrator", role: "admin", punchId: "0000", username: "admin" };
+  const identity = { id: 1, name: "Administrator", role, punchId: "0000", username: "admin" };
   let projectSelects = 0;
   const tx = {
     select() {
@@ -182,4 +182,23 @@ test("inactive or admin accounts cannot be appointed", async () => {
     assert.equal((await response.json()).message, "Only active employee accounts can be project managers.");
     assert.equal(db.updates.length, 0);
   }
+});
+
+test("appointed admins cannot appoint a Project Manager", async () => {
+  const db = createManagerDb({ project: managedProject, manager: activeEmployee, role: "admin" });
+  const response = await patchManager(db, { punchId: "2468" });
+
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).message, "Super User access is required.");
+  assert.equal(db.updates.length, 0);
+});
+
+test("appointing a new manager leaves exactly one manager on the project", async () => {
+  const db = createManagerDb({ project: { ...managedProject, managerId: 11 }, manager: activeEmployee });
+  const response = await patchManager(db, { punchId: "2468" });
+
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).data.managerPunchId, "2468");
+  // The project has a single manager column: the previous manager (11) is replaced, not added to.
+  assert.deepEqual(db.updates, [{ table: projects, values: { managerId: 7 } }]);
 });

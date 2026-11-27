@@ -1,5 +1,6 @@
 import express from "express";
 import { and, eq, inArray, ne } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { accounts, authCredentials, authSessions, projects, reports } from "../../src/db/schema.js";
 import { asyncRoute, HttpError } from "../errors.js";
 import { requireAdmin, requireIdentity, requireSuperUser, superUserRole } from "../identity.js";
@@ -8,9 +9,13 @@ import {
   manpowerActiveSchema,
   manpowerSchema,
   projectManagerAssignmentSchema,
+  projectMembershipSchema,
   punchIdParamsSchema,
 } from "../schemas.js";
 import { validate } from "../validation.js";
+
+const assignedProjects = alias(projects, "assigned_projects");
+const managerProjects = alias(projects, "manager_projects");
 
 function toPerson(account) {
   return {
@@ -19,6 +24,8 @@ function toPerson(account) {
     designation: account.designation,
     active: account.active,
     adminAccess: account.accountRole === "admin",
+    projectId: account.projectId ? String(account.projectId) : null,
+    projectName: account.projectName || null,
     projectManagerProjectId: account.projectManagerProjectId ? String(account.projectManagerProjectId) : null,
     projectManagerProjectName: account.projectManagerProjectName || null,
   };
@@ -36,17 +43,84 @@ export function createManpowerRouter({ db }) {
       designation: accounts.designation,
       active: accounts.active,
       accountRole: accounts.accountRole,
-      projectManagerProjectId: projects.id,
-      projectManagerProjectName: projects.name,
+      projectId: accounts.projectId,
+      projectName: assignedProjects.name,
+      projectManagerProjectId: managerProjects.id,
+      projectManagerProjectName: managerProjects.name,
     })
       .from(accounts)
-      .leftJoin(projects, eq(projects.managerId, accounts.id))
+      .leftJoin(assignedProjects, eq(assignedProjects.id, accounts.projectId))
+      .leftJoin(managerProjects, eq(managerProjects.managerId, accounts.id))
       .where(and(inArray(accounts.accountRole, ["employee", "admin"]), ne(accounts.punchId, "0000")))
       .orderBy(accounts.fullName);
     return res.json({ success: true, data: people.map(toPerson) });
   }));
 
-  router.patch("/:punchId/project-manager", validate(punchIdParamsSchema, "params"), validate(projectManagerAssignmentSchema), asyncRoute(async (req, res) => {
+  router.patch("/:punchId/project", requireSuperUser, validate(punchIdParamsSchema, "params"), validate(projectMembershipSchema), asyncRoute(async (req, res) => {
+    const result = await db.transaction(async (tx) => {
+      const [target] = await tx.select({
+        id: accounts.id,
+        punchId: accounts.punchId,
+        fullName: accounts.fullName,
+        designation: accounts.designation,
+        accountRole: accounts.accountRole,
+        active: accounts.active,
+        projectId: accounts.projectId,
+      })
+        .from(accounts)
+        .where(eq(accounts.punchId, req.validated.params.punchId))
+        .for("update");
+
+      if (!target || target.punchId === "0000" || target.accountRole === superUserRole) {
+        throw new HttpError(404, "Employee account not found.");
+      }
+      if (!["employee", "admin"].includes(target.accountRole)) {
+        throw new HttpError(409, "This account cannot be assigned to a project.");
+      }
+
+      let destination = null;
+      if (req.validated.body.projectId !== null) {
+        [destination] = await tx.select({
+          id: projects.id,
+          name: projects.name,
+        })
+          .from(projects)
+          .where(and(
+            eq(projects.id, req.validated.body.projectId),
+            eq(projects.active, true),
+          ))
+          .for("update");
+
+        if (!destination) throw new HttpError(404, "Active project not found.");
+      }
+
+      const nextProjectId = destination?.id ?? null;
+      if (Number(target.projectId) !== Number(nextProjectId)) {
+        await tx.update(accounts)
+          .set({ projectId: nextProjectId })
+          .where(eq(accounts.id, target.id));
+      }
+
+      const [managerProject] = await tx.select({
+        projectManagerProjectId: projects.id,
+        projectManagerProjectName: projects.name,
+      })
+        .from(projects)
+        .where(eq(projects.managerId, target.id))
+        .limit(1);
+
+      return toPerson({
+        ...target,
+        projectId: nextProjectId,
+        projectName: destination?.name || null,
+        ...managerProject,
+      });
+    });
+
+    return res.json({ success: true, data: result });
+  }));
+
+  router.patch("/:punchId/project-manager", requireSuperUser, validate(punchIdParamsSchema, "params"), validate(projectManagerAssignmentSchema), asyncRoute(async (req, res) => {
     try {
       const result = await db.transaction(async (tx) => {
         const [target] = await tx.select({
@@ -236,16 +310,22 @@ export function createManpowerRouter({ db }) {
       .returning());
 
     if (!account) throw new HttpError(404, "Employee account not found.");
-    const [managerAssignment] = await db.select({
-      projectManagerProjectId: projects.id,
-      projectManagerProjectName: projects.name,
-    })
-      .from(projects)
-      .where(eq(projects.managerId, account.id))
-      .limit(1);
+    const [[assignedProject], [managerAssignment]] = await Promise.all([
+      db.select({ projectName: projects.name })
+        .from(projects)
+        .where(eq(projects.id, account.projectId))
+        .limit(1),
+      db.select({
+        projectManagerProjectId: projects.id,
+        projectManagerProjectName: projects.name,
+      })
+        .from(projects)
+        .where(eq(projects.managerId, account.id))
+        .limit(1),
+    ]);
     return res.json({
       success: true,
-      data: toPerson({ ...account, ...managerAssignment }),
+      data: toPerson({ ...account, ...assignedProject, ...managerAssignment }),
     });
   }));
 

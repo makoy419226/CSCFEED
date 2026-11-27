@@ -15,6 +15,13 @@
       "when": 1795769267353,
       "tag": "0001_lively_madripoor",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795785936226,
+      "tag": "0002_true_zzzax",
+      "breakpoints": true
     }
   ]
 }

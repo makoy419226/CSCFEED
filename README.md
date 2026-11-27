@@ -29,6 +29,7 @@ If either saved local role password is rejected, `npm run dev:local` offers an i
 - Add projects with a name, description, and color, then edit those details later.
 - Delete projects only when no reports reference them.
 - Administer the supplied manpower directory by Punch ID, employee name, designation, active status, and admin access.
+- The Super User can assign or transfer manpower accounts between projects from the Manpower directory. The project-membership migration assigns existing accounts to DS415 except reserved Punch ID 5755; newly added accounts start unassigned.
 - The Super User can appoint or remove admins. Appointed admins can view all reports, manage projects and manpower accounts, and archive reports; they cannot change admin access or the Super User account.
 - Admins can assign an active employee to manage one project. Project Managers can view, upload, download, edit, archive, and export reports only in their assigned project; they cannot manage accounts or projects.
 - The Super User can permanently delete selected reports with their evidence files and delete employee or appointed-admin accounts. A deleted user's reports and uploader attribution are retained.
