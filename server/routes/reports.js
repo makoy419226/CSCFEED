@@ -17,7 +17,16 @@ import {
 } from "drizzle-orm";
 import { accounts, projects, reportFiles, reports } from "../../src/db/schema.js";
 import { asyncRoute, HttpError } from "../errors.js";
-import { requireAdmin, requireIdentity } from "../identity.js";
+import {
+  canManageProjectReports,
+  hasAdminAccess,
+  hasProjectManagerAccess,
+  requireAdmin,
+  requireIdentity,
+  requireProjectManager,
+  requireProjectReportManager,
+  requireSuperUser,
+} from "../identity.js";
 import { assertReportTransition } from "../domain/report-workflow.js";
 import { notifyReportCreated } from "../notifications/email.js";
 import {
@@ -30,7 +39,10 @@ import {
 import { isSupportedReportFile, sanitizeUploadFileName } from "../report-files.js";
 import {
   idParamsSchema,
+  projectIdParamsSchema,
   punchIdParamsSchema,
+  reportBulkDeleteSchema,
+  reportEditSchema,
   reportFileParamsSchema,
   reportFormSchema,
   reportQuerySchema,
@@ -110,6 +122,35 @@ function packageFileName(title, reportId) {
   return `${safeTitle}-${reportId}-package.zip`;
 }
 
+function projectArchiveFileName(projectName) {
+  const safeName = projectName.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+/, "").slice(0, 80) || "project";
+  return `${safeName}-reports.zip`;
+}
+
+function reportArchiveFolder(report) {
+  const safeTitle = report.title.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+/, "").slice(0, 80) || "report";
+  return `${report.id}-${safeTitle}`;
+}
+
+function streamZipFile(zipFile, res, next) {
+  let packageFailed = false;
+  const failPackage = (error) => {
+    if (packageFailed) return;
+    packageFailed = true;
+    zipFile.outputStream.unpipe(res);
+    if (!zipFile.outputStream.destroyed) zipFile.outputStream.destroy();
+    if (res.headersSent) res.destroy(error);
+    else next(error);
+  };
+  zipFile.on("error", failPackage);
+  zipFile.outputStream.on("error", failPackage);
+  res.on("close", () => {
+    if (!res.writableEnded) zipFile.outputStream.destroy();
+  });
+  zipFile.outputStream.pipe(res);
+  zipFile.end();
+}
+
 function uniqueEvidencePath(fileName, index, usedNames) {
   const safeName = sanitizeUploadFileName(fileName) || `evidence-${index + 1}`;
   const extension = path.extname(safeName);
@@ -141,7 +182,11 @@ async function listReports(db, identity, query, maxUploadBytes, ownerId = null) 
   const { projectId, fromDate, toDate, q } = query;
   const filters = [isNull(reports.archivedAt), eq(projects.active, true)];
   if (ownerId !== null) filters.push(eq(reports.uploadedBy, ownerId));
-  else if (identity.role !== "admin") filters.push(eq(reports.uploadedBy, identity.id));
+  else if (!hasAdminAccess(identity.role)) {
+    filters.push(identity.projectManagerProjectId
+      ? eq(reports.projectId, Number(identity.projectManagerProjectId))
+      : eq(reports.uploadedBy, identity.id));
+  }
   if (projectId) filters.push(eq(reports.projectId, projectId));
   if (fromDate) filters.push(gte(reports.reportDate, fromDate));
   if (toDate) filters.push(lte(reports.reportDate, toDate));
@@ -151,8 +196,8 @@ async function listReports(db, identity, query, maxUploadBytes, ownerId = null) 
     filters.push(or(
       ilike(reports.title, pattern),
       ilike(reports.description, pattern),
-      ilike(accounts.fullName, pattern),
-      ilike(accounts.punchId, pattern),
+      ilike(reports.uploaderName, pattern),
+      ilike(reports.uploaderPunchId, pattern),
       ilike(reports.fileName, pattern),
     ));
   }
@@ -163,14 +208,13 @@ async function listReports(db, identity, query, maxUploadBytes, ownerId = null) 
     projectName: projects.name,
     title: reports.title,
     description: reports.description,
-    uploaderName: accounts.fullName,
+    uploaderName: reports.uploaderName,
     reportDate: reports.reportDate,
     fileName: reports.fileName,
     fileSizeBytes: reports.fileSizeBytes,
   })
     .from(reports)
     .innerJoin(projects, eq(projects.id, reports.projectId))
-    .innerJoin(accounts, eq(accounts.id, reports.uploadedBy))
     .where(and(...filters))
     .orderBy(desc(reports.reportDate), desc(reports.createdAt));
 
@@ -201,14 +245,71 @@ async function listReports(db, identity, query, maxUploadBytes, ownerId = null) 
 }
 
 function reportOwnerFilters(identity) {
-  return identity.role === "admin" ? [] : [eq(reports.uploadedBy, identity.id)];
+  if (hasAdminAccess(identity.role)) return [];
+  if (hasProjectManagerAccess(identity)) {
+    return [eq(reports.projectId, Number(identity.projectManagerProjectId))];
+  }
+  return [eq(reports.uploadedBy, identity.id)];
 }
 
 export function createReportsRouter({ db, maxUploadBytes }) {
   const router = express.Router();
   router.use(requireIdentity(db));
 
+  router.delete("/selected", requireSuperUser, validate(reportBulkDeleteSchema), asyncRoute(async (req, res) => {
+    const reportIds = req.validated.body.ids;
+    const filePaths = await db.transaction(async (tx) => {
+      const reportRows = await tx.select({
+        id: reports.id,
+        storageKey: reports.storageKey,
+      })
+        .from(reports)
+        .where(inArray(reports.id, reportIds))
+        .for("update");
+
+      if (reportRows.length !== reportIds.length) {
+        throw new HttpError(404, "One or more selected reports were not found.");
+      }
+
+      const attachmentRows = await tx.select({ storageKey: reportFiles.storageKey })
+        .from(reportFiles)
+        .where(inArray(reportFiles.reportId, reportIds));
+      const storageKeys = new Set([
+        ...reportRows.map((report) => report.storageKey),
+        ...attachmentRows.map((file) => file.storageKey),
+      ]);
+      const paths = [...storageKeys].map((storageKey) => getStoredFilePath(storageKey));
+
+      const deleted = await tx.delete(reports)
+        .where(inArray(reports.id, reportIds))
+        .returning({ id: reports.id });
+      if (deleted.length !== reportIds.length) {
+        throw new HttpError(409, "A selected report changed while the request was being processed.");
+      }
+      return paths;
+    });
+
+    let cleanupPendingCount = 0;
+    for (const filePath of filePaths) {
+      try {
+        await removeLocalFile(filePath);
+      } catch (error) {
+        cleanupPendingCount += 1;
+        console.error("A report was deleted, but its stored evidence file could not be removed:", error);
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: { deletedCount: reportIds.length, cleanupPendingCount },
+    });
+  }));
+
   router.get("/", requireAdmin, validate(reportQuerySchema, "query"), asyncRoute(async (req, res) => {
+    return res.json(await listReports(db, req.identity, req.validated.query, maxUploadBytes));
+  }));
+
+  router.get("/managed", requireProjectManager, validate(reportQuerySchema, "query"), asyncRoute(async (req, res) => {
     return res.json(await listReports(db, req.identity, req.validated.query, maxUploadBytes));
   }));
 
@@ -221,7 +322,7 @@ export function createReportsRouter({ db, maxUploadBytes }) {
       .from(accounts)
       .where(and(
         eq(accounts.punchId, req.validated.params.punchId),
-        eq(accounts.accountRole, "employee"),
+        inArray(accounts.accountRole, ["employee", "admin"]),
       ))
       .limit(1);
     if (!account) throw new HttpError(404, "Employee account not found.");
@@ -235,13 +336,19 @@ export function createReportsRouter({ db, maxUploadBytes }) {
     ));
   }));
 
-  router.get("/:id/download", validate(idParamsSchema, "params"), asyncRoute(async (req, res, next) => {
-    const [report] = await db.select({
+  router.get("/project/:projectId/export", requireProjectReportManager, validate(projectIdParamsSchema, "params"), asyncRoute(async (req, res, next) => {
+    const projectId = req.validated.params.projectId;
+    if (!canManageProjectReports(req.identity, projectId)) {
+      throw new HttpError(403, "You can only export reports from your assigned project.");
+    }
+
+    const reportRows = await db.select({
       id: reports.id,
+      projectId: reports.projectId,
       projectName: projects.name,
       title: reports.title,
       description: reports.description,
-      uploaderName: accounts.fullName,
+      uploaderName: reports.uploaderName,
       reportDate: reports.reportDate,
       fileName: reports.fileName,
       storageKey: reports.storageKey,
@@ -249,7 +356,77 @@ export function createReportsRouter({ db, maxUploadBytes }) {
     })
       .from(reports)
       .innerJoin(projects, eq(projects.id, reports.projectId))
-      .innerJoin(accounts, eq(accounts.id, reports.uploadedBy))
+      .where(and(
+        eq(projects.id, projectId),
+        eq(projects.active, true),
+        isNull(reports.archivedAt),
+      ))
+      .orderBy(desc(reports.reportDate), desc(reports.createdAt));
+
+    if (reportRows.length === 0) throw new HttpError(404, "This project has no active reports to export.");
+
+    const attachmentRows = await db.select({
+      id: reportFiles.id,
+      reportId: reportFiles.reportId,
+      fileName: reportFiles.fileName,
+      storageKey: reportFiles.storageKey,
+      fileSizeBytes: reportFiles.fileSizeBytes,
+    })
+      .from(reportFiles)
+      .where(inArray(reportFiles.reportId, reportRows.map((report) => report.id)))
+      .orderBy(asc(reportFiles.id));
+    const attachmentsByReport = new Map();
+    for (const attachment of attachmentRows) {
+      const reportId = String(attachment.reportId);
+      const files = attachmentsByReport.get(reportId) || [];
+      files.push(attachment);
+      attachmentsByReport.set(reportId, files);
+    }
+
+    const zipFile = new yazl.ZipFile();
+    for (const report of reportRows) {
+      const attachments = attachmentsByReport.get(String(report.id));
+      const files = attachments?.length ? attachments : [{
+        fileName: report.fileName,
+        storageKey: report.storageKey,
+        fileSizeBytes: report.fileSizeBytes,
+      }];
+      const usedEvidenceNames = new Set();
+      const folder = reportArchiveFolder(report);
+      for (const [index, file] of files.entries()) {
+        const filePath = getStoredFilePath(file.storageKey);
+        try {
+          await access(filePath);
+        } catch (error) {
+          if (error.code === "ENOENT") throw new HttpError(404, `An attachment for report ${report.id} is missing.`);
+          throw error;
+        }
+        zipFile.addFile(filePath, `${folder}/${uniqueEvidencePath(file.fileName, index, usedEvidenceNames)}`);
+      }
+
+      const pdf = await createReportPdf(report, files);
+      zipFile.addBuffer(pdf, `${folder}/report.pdf`);
+    }
+
+    res.attachment(projectArchiveFileName(reportRows[0].projectName));
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    streamZipFile(zipFile, res, next);
+  }));
+
+  router.get("/:id/download", validate(idParamsSchema, "params"), asyncRoute(async (req, res, next) => {
+    const [report] = await db.select({
+      id: reports.id,
+      projectName: projects.name,
+      title: reports.title,
+      description: reports.description,
+      uploaderName: reports.uploaderName,
+      reportDate: reports.reportDate,
+      fileName: reports.fileName,
+      storageKey: reports.storageKey,
+      fileSizeBytes: reports.fileSizeBytes,
+    })
+      .from(reports)
+      .innerJoin(projects, eq(projects.id, reports.projectId))
       .where(and(
         eq(reports.id, req.validated.params.id),
         isNull(reports.archivedAt),
@@ -290,29 +467,13 @@ export function createReportsRouter({ db, maxUploadBytes }) {
 
     const pdf = await createReportPdf(report, files);
     const zipFile = new yazl.ZipFile();
-    let packageFailed = false;
-    const failPackage = (error) => {
-      if (packageFailed) return;
-      packageFailed = true;
-      zipFile.outputStream.unpipe(res);
-      if (!zipFile.outputStream.destroyed) zipFile.outputStream.destroy();
-      if (res.headersSent) res.destroy(error);
-      else next(error);
-    };
-    zipFile.on("error", failPackage);
-    zipFile.outputStream.on("error", failPackage);
-    res.on("close", () => {
-      if (!res.writableEnded) zipFile.outputStream.destroy();
-    });
-
     res.attachment(packageFileName(report.title, report.id));
     res.setHeader("X-Content-Type-Options", "nosniff");
     zipFile.addBuffer(pdf, "report.pdf");
     for (const file of storedFiles) {
       zipFile.addFile(file.filePath, file.archivePath);
     }
-    zipFile.outputStream.pipe(res);
-    zipFile.end();
+    streamZipFile(zipFile, res, next);
   }));
 
   router.post("/", reportUpload.fields([{ name: "files" }, { name: "file" }]), asyncRoute(async (req, res) => {
@@ -364,12 +525,19 @@ export function createReportsRouter({ db, maxUploadBytes }) {
         if (!project || !project.active) {
           throw new HttpError(404, "Choose an active project.");
         }
+        if (!hasAdminAccess(req.identity.role)
+          && req.identity.projectManagerProjectId
+          && Number(project.id) !== Number(req.identity.projectManagerProjectId)) {
+          throw new HttpError(403, "You can only upload reports to your assigned project.");
+        }
 
         const firstFile = files[0];
         const firstCommittedFile = committedFiles[0];
         const [report] = await tx.insert(reports).values({
           projectId: project.id,
           uploadedBy: req.identity.id,
+          uploaderName: req.identity.name,
+          uploaderPunchId: req.identity.punchId,
           reportDate: parsed.data.reportDate,
           title: parsed.data.title,
           description: parsed.data.description,
@@ -420,6 +588,181 @@ export function createReportsRouter({ db, maxUploadBytes }) {
       success: true,
       data: toReport(reportRow, reportRow.files),
       notification,
+    });
+  }));
+
+  router.patch("/:id", requireProjectReportManager, validate(idParamsSchema, "params"), reportUpload.fields([{ name: "files" }, { name: "file" }]), asyncRoute(async (req, res) => {
+    const uploads = [
+      ...(req.files?.files || []),
+      ...(req.files?.file || []),
+    ];
+    let removeFileIds;
+    try {
+      removeFileIds = JSON.parse(req.body.removeFileIds || "[]");
+    } catch {
+      await cleanupUploads(uploads.map((file) => file.path));
+      throw new HttpError(400, "Attachment removals must be a valid list.");
+    }
+
+    const parsed = reportEditSchema.safeParse({
+      title: req.body.title,
+      description: req.body.description,
+      reportDate: req.body.reportDate,
+      removeFileIds,
+      removeLegacyFile: req.body.removeLegacyFile === "true",
+    });
+    if (!parsed.success) {
+      await cleanupUploads(uploads.map((file) => file.path));
+      throw new HttpError(400, parsed.error.issues[0]?.message || "Invalid report details.");
+    }
+
+    const files = uploads.map((file) => ({
+      upload: file,
+      fileName: sanitizeUploadFileName(file.originalname),
+    }));
+    const invalidFile = files.find(({ fileName }) =>
+      !fileName || fileName.length > 255 || !isSupportedReportFile(fileName),
+    );
+    if (invalidFile) {
+      await cleanupUploads(uploads.map((file) => file.path));
+      throw new HttpError(
+        400,
+        "Choose supported image, PDF, Word, Excel, CSV, or text files with names up to 255 characters.",
+      );
+    }
+
+    const committedFiles = [];
+    let updatedReport;
+    try {
+      for (const { upload } of files) {
+        committedFiles.push(await commitUpload(upload));
+      }
+
+      updatedReport = await db.transaction(async (tx) => {
+        const [current] = await tx.select({
+          id: reports.id,
+          projectId: reports.projectId,
+          projectName: projects.name,
+          projectActive: projects.active,
+          uploaderName: reports.uploaderName,
+          title: reports.title,
+          description: reports.description,
+          reportDate: reports.reportDate,
+          fileName: reports.fileName,
+          storageKey: reports.storageKey,
+          contentType: reports.contentType,
+          fileSizeBytes: reports.fileSizeBytes,
+          archivedAt: reports.archivedAt,
+        })
+          .from(reports)
+          .innerJoin(projects, eq(projects.id, reports.projectId))
+          .where(eq(reports.id, req.validated.params.id))
+          .for("update");
+
+        if (!current) throw new HttpError(404, "Report not found.");
+        if (!current.projectActive || current.archivedAt) {
+          throw new HttpError(409, "Archived or inactive-project reports cannot be edited.");
+        }
+        if (!canManageProjectReports(req.identity, current.projectId)) {
+          throw new HttpError(403, "You can only edit reports in your assigned project.");
+        }
+
+        let currentFiles = await tx.select({
+          id: reportFiles.id,
+          fileName: reportFiles.fileName,
+          storageKey: reportFiles.storageKey,
+          contentType: reportFiles.contentType,
+          fileSizeBytes: reportFiles.fileSizeBytes,
+        })
+          .from(reportFiles)
+          .where(eq(reportFiles.reportId, current.id))
+          .orderBy(asc(reportFiles.id));
+
+        let legacyAttachmentId = null;
+        if (currentFiles.length === 0) {
+          currentFiles = await tx.insert(reportFiles).values({
+            reportId: current.id,
+            fileName: current.fileName,
+            storageKey: current.storageKey,
+            contentType: current.contentType,
+            fileSizeBytes: current.fileSizeBytes,
+          }).returning();
+          legacyAttachmentId = currentFiles[0].id;
+        }
+
+        const currentFileIds = new Set(currentFiles.map((file) => Number(file.id)));
+        if (parsed.data.removeFileIds.some((id) => !currentFileIds.has(id))) {
+          throw new HttpError(400, "One or more selected attachments do not belong to this report.");
+        }
+
+        const removeFileIdsSet = new Set(parsed.data.removeFileIds);
+        if (parsed.data.removeLegacyFile && legacyAttachmentId !== null) {
+          removeFileIdsSet.add(Number(legacyAttachmentId));
+        }
+        const removedFiles = currentFiles.filter((file) => removeFileIdsSet.has(Number(file.id)));
+        const retainedFiles = currentFiles.filter((file) => !removeFileIdsSet.has(Number(file.id)));
+        if (retainedFiles.length + committedFiles.length === 0) {
+          throw new HttpError(409, "A report must keep at least one evidence attachment.");
+        }
+
+        const removedFilePaths = removedFiles.map((file) => getStoredFilePath(file.storageKey));
+        if (removedFiles.length) {
+          await tx.delete(reportFiles)
+            .where(inArray(reportFiles.id, removedFiles.map((file) => file.id)));
+        }
+
+        const addedFiles = committedFiles.length
+          ? await tx.insert(reportFiles).values(files.map(({ upload, fileName }, index) => ({
+            reportId: current.id,
+            fileName,
+            storageKey: committedFiles[index].storageKey,
+            contentType: upload.mimetype || "application/octet-stream",
+            fileSizeBytes: upload.size,
+          }))).returning()
+          : [];
+        const finalFiles = [...retainedFiles, ...addedFiles];
+        const firstFile = finalFiles[0];
+        const [report] = await tx.update(reports)
+          .set({
+            title: parsed.data.title,
+            description: parsed.data.description,
+            reportDate: parsed.data.reportDate,
+            fileName: firstFile.fileName,
+            storageKey: firstFile.storageKey,
+            contentType: firstFile.contentType,
+            fileSizeBytes: firstFile.fileSizeBytes,
+          })
+          .where(eq(reports.id, current.id))
+          .returning();
+
+        return {
+          report: { ...report, projectName: current.projectName, uploaderName: current.uploaderName },
+          files: finalFiles,
+          removedFilePaths,
+        };
+      });
+    } catch (error) {
+      await cleanupUploads([
+        ...committedFiles.map((file) => file.filePath),
+        ...uploads.map((file) => file.path),
+      ]);
+      throw error;
+    }
+
+    let cleanupPendingCount = 0;
+    for (const filePath of updatedReport.removedFilePaths) {
+      try {
+        await removeLocalFile(filePath);
+      } catch (error) {
+        cleanupPendingCount += 1;
+        console.error("A report attachment was replaced, but its previous evidence file could not be removed:", error);
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: toReport(updatedReport.report, updatedReport.files),
+      cleanupPendingCount,
     });
   }));
 
@@ -523,11 +866,12 @@ export function createReportsRouter({ db, maxUploadBytes }) {
     });
   }));
 
-  router.post("/:id/archive", requireAdmin, validate(idParamsSchema, "params"), asyncRoute(async (req, res) => {
+  router.post("/:id/archive", requireProjectReportManager, validate(idParamsSchema, "params"), asyncRoute(async (req, res) => {
     const reportId = req.validated.params.id;
     const archived = await db.transaction(async (tx) => {
       const [current] = await tx.select({
         id: reports.id,
+        projectId: reports.projectId,
         archivedAt: reports.archivedAt,
       })
         .from(reports)
@@ -535,7 +879,7 @@ export function createReportsRouter({ db, maxUploadBytes }) {
         .for("update");
 
       if (!current) throw new HttpError(404, "Report not found.");
-      assertReportTransition(current.archivedAt ? "archived" : "active", "archived", req.identity);
+      assertReportTransition(current.archivedAt ? "archived" : "active", "archived", req.identity, current.projectId);
 
       const [updated] = await tx.update(reports)
         .set({ archivedAt: new Date(), archivedBy: req.identity.id })

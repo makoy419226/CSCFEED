@@ -34,11 +34,13 @@ export const projects = cscfeed.table("projects", {
   description: text("description").notNull().default(""),
   color: text("color").notNull().default("blue"),
   active: boolean("active").notNull().default(true),
-  createdBy: bigint("created_by", { mode: "number" }).references(() => accounts.id, { onDelete: "restrict" }),
+  managerId: bigint("manager_id", { mode: "number" }).references(() => accounts.id, { onDelete: "set null" }),
+  createdBy: bigint("created_by", { mode: "number" }).references(() => accounts.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("projects_name_ci_unique").on(sql`lower(${table.name})`),
+  uniqueIndex("projects_manager_id_unique").on(table.managerId).where(sql`${table.managerId} IS NOT NULL`),
 ]);
 
 export const reports = cscfeed.table("reports", {
@@ -47,8 +49,9 @@ export const reports = cscfeed.table("reports", {
     .notNull()
     .references(() => projects.id, { onDelete: "restrict" }),
   uploadedBy: bigint("uploaded_by", { mode: "number" })
-    .notNull()
-    .references(() => accounts.id, { onDelete: "restrict" }),
+    .references(() => accounts.id, { onDelete: "set null" }),
+  uploaderName: text("uploader_name").notNull(),
+  uploaderPunchId: text("uploader_punch_id").notNull(),
   reportDate: date("report_date", { mode: "string" }).notNull().default(sql`CURRENT_DATE`),
   title: text("title").notNull(),
   description: text("description").notNull().default(""),
@@ -58,7 +61,7 @@ export const reports = cscfeed.table("reports", {
   fileSizeBytes: bigint("file_size_bytes", { mode: "number" }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   archivedAt: timestamp("archived_at", { withTimezone: true }),
-  archivedBy: bigint("archived_by", { mode: "number" }).references(() => accounts.id, { onDelete: "restrict" }),
+  archivedBy: bigint("archived_by", { mode: "number" }).references(() => accounts.id, { onDelete: "set null" }),
 }, (table) => [
   index("reports_project_date_idx").on(table.projectId, table.reportDate),
   index("reports_uploader_date_idx").on(table.uploadedBy, table.reportDate),

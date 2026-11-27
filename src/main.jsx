@@ -90,6 +90,16 @@ function validateReportFiles(files, maxSize) {
   return "";
 }
 
+function validateAdditionalReportFiles(files, maxSize) {
+  if (files.some((file) => !supportedReportExtensions.has(getFileExtension(file.name)))) {
+    return "Choose image, PDF, Word, Excel, CSV, or text files.";
+  }
+  if (files.some((file) => file.size > maxSize)) {
+    return `Each file must be smaller than ${formatUploadLimit(maxSize)}.`;
+  }
+  return "";
+}
+
 function ReportFilePreview({ file, fileName, fileSizeBytes, reportId, fileId }) {
   const [preview, setPreview] = useState({ kind: "loading" });
 
@@ -231,6 +241,106 @@ function ReportAttachments({ report, onDownload }) {
   </div>;
 }
 
+function ReportEditModal({ report, maxUploadBytes, isSaving, onClose, onSave }) {
+  const [title, setTitle] = useState(report.title);
+  const [description, setDescription] = useState(report.description || "");
+  const [reportDate, setReportDate] = useState(report.date);
+  const [removedFileIds, setRemovedFileIds] = useState([]);
+  const [removeLegacyFile, setRemoveLegacyFile] = useState(false);
+  const [newFiles, setNewFiles] = useState([]);
+  const [error, setError] = useState("");
+  const fileInput = useRef(null);
+  const attachments = report.files?.length ? report.files : [report];
+  const retainedCount = attachments.filter((file) => file.id
+    ? !removedFileIds.includes(file.id)
+    : !removeLegacyFile).length;
+  const evidenceCount = retainedCount + newFiles.length;
+
+  const submit = async (event) => {
+    event.preventDefault();
+    const fileError = validateAdditionalReportFiles(newFiles, maxUploadBytes);
+    if (fileError) {
+      setError(fileError);
+      return;
+    }
+    if (evidenceCount === 0) {
+      setError("A report must keep at least one evidence attachment.");
+      return;
+    }
+    const body = new FormData();
+    body.append("title", title);
+    body.append("description", description);
+    body.append("reportDate", reportDate);
+    body.append("removeFileIds", JSON.stringify(removedFileIds));
+    body.append("removeLegacyFile", String(removeLegacyFile));
+    for (const file of newFiles) body.append("files", file);
+    setError(await onSave(report, body) || "");
+  };
+
+  const toggleRemoval = (file) => {
+    if (!file.id) {
+      setRemoveLegacyFile((current) => !current);
+      setError("");
+      return;
+    }
+    setRemovedFileIds((current) => current.includes(file.id)
+      ? current.filter((id) => id !== file.id)
+      : [...current, file.id]);
+    setError("");
+  };
+
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isSaving) onClose(); }}>
+    <section className="upload-modal report-edit-modal" role="dialog" aria-modal="true" aria-labelledby="report-edit-title">
+      <div className="modal-heading">
+        <div><span className="modal-icon"><Pencil size={18} /></span><div><h2 id="report-edit-title">Edit report</h2><p>Update report details and evidence attachments.</p></div></div>
+        <button type="button" className="icon-button" aria-label="Close report editor" disabled={isSaving} onClick={onClose}><X size={19} /></button>
+      </div>
+      <form onSubmit={submit}>
+        <label className="form-label">Report title <span className="required">*</span>
+          <input required maxLength="160" value={title} onChange={(event) => setTitle(event.target.value)} />
+        </label>
+        <label className="form-label">Description <span className="optional">(optional)</span>
+          <textarea rows="3" maxLength="2000" value={description} onChange={(event) => setDescription(event.target.value)} />
+        </label>
+        <label className="form-label">Report date <span className="required">*</span>
+          <input type="date" required value={reportDate} onChange={(event) => setReportDate(event.target.value)} />
+        </label>
+        <div className="form-label">Evidence attachments <span className="required">*</span></div>
+        <div className="report-edit-files">
+          {attachments.map((file, index) => {
+            const removed = file.id ? removedFileIds.includes(file.id) : removeLegacyFile;
+            return <div className={`report-edit-file ${removed ? "report-edit-file-removed" : ""}`} key={file.id || `${file.fileName}-${index}`}>
+              <span className="file-icon"><FileText size={16} /></span>
+              <div><strong>{file.fileName}</strong><small>{file.fileSize || report.fileSize}</small></div>
+              <button type="button" className="button button-secondary" disabled={isSaving} onClick={() => toggleRemoval(file)}>{removed ? "Keep" : "Remove"}</button>
+            </div>;
+          })}
+          {newFiles.map((file, index) => <div className="report-edit-file" key={`${file.name}-${file.size}-${file.lastModified}`}>
+            <span className="file-icon"><Upload size={16} /></span>
+            <div><strong>{file.name}</strong><small>New evidence · {(file.size / (1024 * 1024)).toFixed(2)} MB</small></div>
+            <button type="button" className="button button-secondary" disabled={isSaving} onClick={() => setNewFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}>Remove</button>
+          </div>)}
+        </div>
+        <input ref={fileInput} className="sr-only" aria-label="Add evidence attachments" type="file" accept={reportFileAccept} multiple onChange={(event) => {
+          setNewFiles((current) => [...current, ...Array.from(event.target.files || [])]);
+          setError("");
+          event.target.value = "";
+        }} />
+        <button type="button" className="button button-secondary report-edit-add-file" disabled={isSaving} onClick={() => fileInput.current?.click()}><Plus size={15} /> Add evidence</button>
+        <p className="report-edit-evidence-count">{evidenceCount} evidence file{evidenceCount === 1 ? "" : "s"} will remain · {formatUploadLimit(maxUploadBytes)} max per new file</p>
+        {error && <p className="field-error" role="alert">{error}</p>}
+        <div className="modal-footer">
+          <span><ShieldCheck size={15} /> At least one evidence file is required</span>
+          <div>
+            <button type="button" className="button button-secondary" disabled={isSaving} onClick={onClose}>Cancel</button>
+            <button type="submit" className="button button-primary" disabled={isSaving || evidenceCount === 0}><Check size={16} /> {isSaving ? "Saving…" : "Save changes"}</button>
+          </div>
+        </div>
+      </form>
+    </section>
+  </div>;
+}
+
 function ScreenTransition({ screenKey, children }) {
   const [screen, setScreen] = useState({ key: screenKey, children });
   const [phase, setPhase] = useState("enter");
@@ -291,6 +401,7 @@ function App() {
             name: result.user.name || result.user.username,
             role: result.user.role.toLowerCase(),
             punchId: result.user.punchId || result.user.username || "",
+            projectManagerProjectId: result.user.projectManagerProjectId || null,
           });
         }
       } catch (error) {
@@ -332,11 +443,14 @@ function App() {
 }
 
 function Workspace({ user, onLogout, onUserUpdated }) {
-  const [activePage, setActivePage] = useState("Overview");
+  const [activePage, setActivePage] = useState(user.role === "employee" && user.projectManagerProjectId ? "Reports" : "Overview");
   const [clockNow, setClockNow] = useState(() => new Date());
   const [projects, setProjects] = useState([]);
   const [manpower, setManpower] = useState([]);
   const [manpowerSearch, setManpowerSearch] = useState("");
+  const [updatingAdminAccessPunchId, setUpdatingAdminAccessPunchId] = useState(null);
+  const [deletingManpowerPunchId, setDeletingManpowerPunchId] = useState(null);
+  const [assigningProjectManagerPunchId, setAssigningProjectManagerPunchId] = useState(null);
   const [reportLogPerson, setReportLogPerson] = useState(null);
   const [employeeReports, setEmployeeReports] = useState([]);
   const [isEmployeeReportsLoading, setIsEmployeeReportsLoading] = useState(false);
@@ -347,11 +461,15 @@ function Workspace({ user, onLogout, onUserUpdated }) {
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
   const [reports, setReports] = useState([]);
+  const [selectedReportIds, setSelectedReportIds] = useState([]);
+  const [isDeletingReports, setIsDeletingReports] = useState(false);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [maxUploadBytes, setMaxUploadBytes] = useState(512 * 1024 * 1024);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [selectedReport, setSelectedReport] = useState(null);
+  const [editingReport, setEditingReport] = useState(null);
+  const [isSavingReport, setIsSavingReport] = useState(false);
   const [isProjectFormOpen, setIsProjectFormOpen] = useState(false);
   const [isManpowerFormOpen, setIsManpowerFormOpen] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
@@ -384,9 +502,14 @@ function Workspace({ user, onLogout, onUserUpdated }) {
   const clockTime = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(clockNow);
   const clockDate = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(clockNow);
   const userInitials = currentUser.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
-  const isAdministrator = user.role === "admin";
+  const isAdministrator = user.role === "admin" || user.role === "super_admin";
+  const isSuperUser = user.role === "super_admin";
+  const isProjectManager = !isAdministrator && Boolean(user.projectManagerProjectId);
+  const canManageProjectReports = isAdministrator || isProjectManager;
   const projectColors = ["blue", "orange", "green", "purple"];
-  const projectOptions = [{ id: "all", name: "All projects" }, ...projects];
+  const projectOptions = isProjectManager
+    ? projects
+    : [{ id: "all", name: "All projects" }, ...projects];
   const isSigningOut = useRef(false);
 
   useEffect(() => {
@@ -411,13 +534,14 @@ function Workspace({ user, onLogout, onUserUpdated }) {
       try {
         const [projectResult, reportResult, configResult] = await Promise.all([
           apiRequest("/api/projects"),
-          apiRequest(isAdministrator ? "/api/reports" : "/api/reports/mine"),
+          apiRequest(isAdministrator ? "/api/reports" : isProjectManager ? "/api/reports/managed" : "/api/reports/mine"),
           apiRequest("/api/config"),
         ]);
         const manpowerResult = isAdministrator ? await apiRequest("/api/manpower") : null;
         if (!active) return;
         setProjects(projectResult.data);
         setReports(reportResult.data);
+        if (isProjectManager) setProjectFilter(String(user.projectManagerProjectId));
         setMaxUploadBytes(configResult.maxUploadBytes);
         if (manpowerResult) setManpower(manpowerResult.data);
       } catch (error) {
@@ -429,7 +553,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
 
     void loadWorkspace();
     return () => { active = false; };
-  }, [isAdministrator]);
+  }, [isAdministrator, isProjectManager, user.projectManagerProjectId]);
 
   useEffect(() => {
     const handleLogoutShortcut = (event) => {
@@ -471,18 +595,44 @@ function Workspace({ user, onLogout, onUserUpdated }) {
   const filteredReports = useMemo(() => matchingReports.filter((report) =>
     projectFilter === "all" || report.projectId === projectFilter,
   ), [matchingReports, projectFilter]);
+  const allReportsSelected = reports.length > 0 && reports.every((report) => selectedReportIds.includes(report.id));
   const projectReportCounts = useMemo(() => {
     const counts = new Map(projects.map((project) => [project.id, 0]));
     matchingReports.forEach((report) => counts.set(report.projectId, (counts.get(report.projectId) || 0) + 1));
     return counts;
   }, [projects, matchingReports]);
 
+  useEffect(() => {
+    const handleSelectAllReports = (event) => {
+      if ((!event.ctrlKey && !event.metaKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "a") return;
+      if (!isSuperUser || reports.length === 0 || !["Overview", "Reports"].includes(activePage) || document.querySelector('[role="dialog"]')) return;
+      const target = event.target;
+      if (target instanceof HTMLElement
+        && (target.isContentEditable || target.closest('input:not([type="checkbox"]):not([type="radio"]), textarea, select, [role="textbox"]'))) {
+        return;
+      }
+
+      event.preventDefault();
+      setSelectedReportIds(reports.map((report) => report.id));
+    };
+
+    window.addEventListener("keydown", handleSelectAllReports);
+    return () => window.removeEventListener("keydown", handleSelectAllReports);
+  }, [activePage, isSuperUser, reports]);
+
   const filteredManpower = useMemo(() => manpower.filter((person) =>
     `${person.punchId} ${person.name} ${person.designation}`.toLowerCase().includes(manpowerSearch.trim().toLowerCase()),
   ), [manpower, manpowerSearch]);
 
   const openUpload = () => {
-    setForm({ projectId: projectFilter === "all" ? "" : projectFilter, date: today, title: "", description: "" });
+    setForm({
+      projectId: isProjectManager
+        ? String(user.projectManagerProjectId)
+        : projectFilter === "all" ? "" : projectFilter,
+      date: today,
+      title: "",
+      description: "",
+    });
     setSelectedFiles([]);
     setIsUploadConfirming(false);
     setPreviewingUploadFile(null);
@@ -493,6 +643,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
 
   const submitProfileSettings = async (event) => {
     event.preventDefault();
+    if (!isSuperUser) return;
     setProfileError("");
     if (profileForm.newPassword !== profileForm.confirmPassword && (profileForm.newPassword || profileForm.confirmPassword)) {
       setProfileError("New password and confirmation do not match.");
@@ -571,7 +722,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
       );
       if (editingProject) {
         setProjects((items) => items.map((project) => project.id === editingProject.id
-          ? { ...result.data, reportCount: project.reportCount }
+          ? { ...result.data, reportCount: project.reportCount, managerName: project.managerName, managerPunchId: project.managerPunchId }
           : project));
         setNotice("Project details updated.");
       } else {
@@ -581,6 +732,66 @@ function Workspace({ user, onLogout, onUserUpdated }) {
       setIsProjectFormOpen(false);
     } catch (error) {
       setProjectFormError(error instanceof Error ? error.message : "Unable to save the project.");
+    }
+    window.setTimeout(() => setNotice(""), 5000);
+  };
+
+  const syncProjectManager = (previousPunchId, person) => {
+    setProjects((items) => items.map((project) => {
+      const isPreviousAssignment = project.managerPunchId === previousPunchId;
+      const isNewAssignment = Boolean(person.projectManagerProjectId)
+        && project.id === person.projectManagerProjectId;
+      if (!isPreviousAssignment && !isNewAssignment) return project;
+      return {
+        ...project,
+        managerName: isNewAssignment ? person.projectManagerProjectName || person.name : null,
+        managerPunchId: isNewAssignment ? person.punchId : null,
+      };
+    }));
+  };
+
+  const toggleManpowerAdminAccess = async (person) => {
+    if (!isSuperUser || updatingAdminAccessPunchId) return;
+    const grantAccess = !person.adminAccess;
+    const confirmation = grantAccess
+      ? `Grant admin access to ${person.name}? They will be able to view and download all reports, manage projects and manpower accounts, and archive reports. They will sign in using their Punch ID only.`
+      : `Remove admin access from ${person.name}? They will return to employee access.`;
+    if (!window.confirm(confirmation)) return;
+
+    setUpdatingAdminAccessPunchId(person.punchId);
+    try {
+      const result = await apiRequest(`/api/manpower/${encodeURIComponent(person.punchId)}/admin-access`, {
+        method: "PATCH",
+        body: { adminAccess: grantAccess },
+      });
+      setManpower((items) => items.map((item) => item.punchId === person.punchId ? result.data : item));
+      syncProjectManager(person.punchId, result.data);
+      setNotice(`${person.name} admin access ${grantAccess ? "granted" : "removed"}. It takes effect after their next page load.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to update admin access.");
+    } finally {
+      setUpdatingAdminAccessPunchId(null);
+    }
+    window.setTimeout(() => setNotice(""), 5000);
+  };
+
+  const assignProjectManager = async (person, projectId) => {
+    if (!isAdministrator || assigningProjectManagerPunchId) return;
+    setAssigningProjectManagerPunchId(person.punchId);
+    try {
+      const result = await apiRequest(`/api/manpower/${encodeURIComponent(person.punchId)}/project-manager`, {
+        method: "PATCH",
+        body: { projectId: projectId ? Number(projectId) : null },
+      });
+      setManpower((items) => items.map((item) => item.punchId === person.punchId ? result.data : item));
+      syncProjectManager(person.punchId, result.data);
+      setNotice(result.data.projectManagerProjectName
+        ? `${person.name} assigned to manage ${result.data.projectManagerProjectName}.`
+        : `${person.name} project manager access removed.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to update the Project Manager assignment.");
+    } finally {
+      setAssigningProjectManagerPunchId(null);
     }
     window.setTimeout(() => setNotice(""), 5000);
   };
@@ -626,6 +837,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
       );
       if (editingManpower) {
         setManpower((items) => items.map((person) => person.punchId === editingManpower.punchId ? result.data : person));
+        syncProjectManager(editingManpower.punchId, result.data);
         setNotice("Manpower account updated.");
       } else {
         setManpower((items) => [...items, result.data].sort((a, b) => a.name.localeCompare(b.name)));
@@ -646,6 +858,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
         body: { active: !person.active },
       });
       setManpower((items) => items.map((item) => item.punchId === person.punchId ? result.data : item));
+      syncProjectManager(person.punchId, result.data);
       setNotice(`${person.name} marked ${person.active ? "inactive" : "active"}.`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Unable to update the manpower account.");
@@ -714,6 +927,28 @@ function Workspace({ user, onLogout, onUserUpdated }) {
     window.setTimeout(() => setNotice(""), 5000);
   };
 
+  const saveReportEdit = async (report, body) => {
+    if (!canManageProjectReports || isSavingReport) return "You do not have permission to edit this report.";
+    setIsSavingReport(true);
+    let resultMessage = "";
+    try {
+      const result = await apiRequest(`/api/reports/${encodeURIComponent(report.id)}`, { method: "PATCH", body });
+      setReports((items) => items.map((item) => item.id === report.id ? result.data : item));
+      setSelectedReport((current) => current?.id === report.id ? result.data : current);
+      setEditingReport(null);
+      setNotice(result.cleanupPendingCount
+        ? "Report updated, but one or more previous evidence files could not be removed. Check server logs."
+        : "Report updated.");
+    } catch (error) {
+      resultMessage = error instanceof Error ? error.message : "Unable to update the report.";
+      setNotice(resultMessage);
+    } finally {
+      setIsSavingReport(false);
+    }
+    window.setTimeout(() => setNotice(""), 5000);
+    return resultMessage;
+  };
+
   const downloadReport = (report, attachment = null) => {
     const link = document.createElement("a");
     if (attachment) {
@@ -729,16 +964,106 @@ function Workspace({ user, onLogout, onUserUpdated }) {
     link.remove();
   };
 
+  const exportProjectReports = (project) => {
+    if (!canManageProjectReports) return;
+    const link = document.createElement("a");
+    link.href = `/api/reports/project/${encodeURIComponent(project.id)}/export`;
+    link.download = `${project.name}-reports.zip`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
   const archiveReport = async (report) => {
-    if (!isAdministrator || !window.confirm(`Archive "${report.title}"?`)) return;
+    if (!canManageProjectReports || !window.confirm(`Archive "${report.title}"?`)) return;
     try {
       await apiRequest(`/api/reports/${encodeURIComponent(report.id)}/archive`, { method: "POST" });
       setReports((items) => items.filter((item) => item.id !== report.id));
+      setSelectedReportIds((items) => items.filter((id) => id !== report.id));
       setNotice("Report archived.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Unable to archive the report.");
     }
     window.setTimeout(() => setNotice(""), 5000);
+  };
+
+  const toggleReportSelection = (reportId, selected) => {
+    if (!isSuperUser) return;
+    setSelectedReportIds((current) => selected
+      ? [...new Set([...current, reportId])]
+      : current.filter((id) => id !== reportId));
+  };
+
+  const toggleSelectAllReports = () => {
+    if (!isSuperUser) return;
+    setSelectedReportIds(allReportsSelected ? [] : reports.map((report) => report.id));
+  };
+
+  const deleteSelectedReports = async () => {
+    if (!isSuperUser || isDeletingReports || selectedReportIds.length === 0) return;
+    const reportIds = [...selectedReportIds];
+    if (!window.confirm(`Permanently delete ${reportIds.length} selected report${reportIds.length === 1 ? "" : "s"} and all attached evidence files? This cannot be undone.`)) return;
+
+    setIsDeletingReports(true);
+    let deletedCount = 0;
+    let cleanupPendingCount = 0;
+    let failureMessage = "";
+    try {
+      for (let offset = 0; offset < reportIds.length; offset += 100) {
+        const batch = reportIds.slice(offset, offset + 100);
+        try {
+          const result = await apiRequest("/api/reports/selected", {
+            method: "DELETE",
+            body: { ids: batch },
+          });
+          const removedIds = new Set(batch);
+          deletedCount += result.data.deletedCount;
+          cleanupPendingCount += result.data.cleanupPendingCount;
+          setReports((items) => items.filter((report) => !removedIds.has(report.id)));
+          setSelectedReportIds((items) => items.filter((id) => !removedIds.has(id)));
+          setSelectedReport((current) => current && removedIds.has(current.id) ? null : current);
+        } catch (error) {
+          failureMessage = error instanceof Error ? error.message : "Unable to delete the selected reports.";
+          break;
+        }
+      }
+
+      if (failureMessage) {
+        setNotice(deletedCount
+          ? `${deletedCount} reports were deleted before the remaining deletion failed: ${failureMessage}`
+          : failureMessage);
+      } else {
+        setNotice(cleanupPendingCount
+          ? `${deletedCount} report${deletedCount === 1 ? "" : "s"} deleted; ${cleanupPendingCount} evidence file${cleanupPendingCount === 1 ? "" : "s"} could not be removed. Check server logs.`
+          : `${deletedCount} report${deletedCount === 1 ? "" : "s"} and attached evidence permanently deleted.`);
+      }
+    } finally {
+      setIsDeletingReports(false);
+    }
+    window.setTimeout(() => setNotice(""), 7000);
+  };
+
+  const deleteManpowerAccount = async (person) => {
+    if (!isSuperUser || deletingManpowerPunchId) return;
+    const accountType = person.adminAccess ? "appointed administrator" : "employee";
+    if (!window.confirm(`Permanently delete ${accountType} ${person.name} (Punch ID ${person.punchId})? Their submitted reports will remain with uploader attribution, but their account and sign-in sessions will be removed. This cannot be undone.`)) return;
+
+    setDeletingManpowerPunchId(person.punchId);
+    try {
+      const result = await apiRequest(`/api/manpower/${encodeURIComponent(person.punchId)}`, { method: "DELETE" });
+      setManpower((items) => items.filter((item) => item.punchId !== person.punchId));
+      syncProjectManager(person.punchId, { projectManagerProjectId: null });
+      if (reportLogPerson?.punchId === person.punchId) {
+        setReportLogPerson(null);
+        setEmployeeReports([]);
+      }
+      setNotice(`${result.data.name} deleted. ${result.data.preservedReportCount} submitted report${result.data.preservedReportCount === 1 ? "" : "s"} and uploader attribution preserved.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to delete the manpower account.");
+    } finally {
+      setDeletingManpowerPunchId(null);
+    }
+    window.setTimeout(() => setNotice(""), 7000);
   };
 
   const deleteProject = async (project) => {
@@ -751,6 +1076,9 @@ function Workspace({ user, onLogout, onUserUpdated }) {
     try {
       await apiRequest(`/api/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" });
       setProjects((items) => items.filter((item) => item.id !== project.id));
+      setManpower((items) => items.map((person) => person.projectManagerProjectId === project.id
+        ? { ...person, projectManagerProjectId: null, projectManagerProjectName: null }
+        : person));
       setProjectFilter((current) => current === project.id ? "all" : current);
       setNotice("Project deleted.");
     } catch (error) {
@@ -761,8 +1089,9 @@ function Workspace({ user, onLogout, onUserUpdated }) {
 
   const navigate = (page) => {
     if (page === "Manpower" && !isAdministrator) return;
-    if ((page === "Reports" || page === "Projects") && !isAdministrator) return;
-    if (page === "Settings" && !isAdministrator) return;
+    if ((page === "Reports" || page === "Projects") && !canManageProjectReports) return;
+    if (page === "Projects" && !isAdministrator) return;
+    if (page === "Settings" && !isSuperUser) return;
     if (page === "Settings") {
       if (activePage !== "Settings") {
         setProfileForm({ displayName: currentUser, currentPassword: "", newPassword: "", confirmPassword: "" });
@@ -780,8 +1109,10 @@ function Workspace({ user, onLogout, onUserUpdated }) {
 
   const openFullReportLog = () => {
     if (!summaryPopover) return;
-    if (isAdministrator) setActivePage("Reports");
-    setProjectFilter(summaryPopover.kind === "project" ? summaryPopover.projectId : "all");
+    if (canManageProjectReports) setActivePage("Reports");
+    setProjectFilter(isProjectManager
+      ? String(user.projectManagerProjectId)
+      : summaryPopover.kind === "project" ? summaryPopover.projectId : "all");
     setSearch("");
     setDateFromFilter(summaryPopover.kind === "today" ? today : "");
     setDateToFilter(summaryPopover.kind === "today" ? today : "");
@@ -822,12 +1153,13 @@ function Workspace({ user, onLogout, onUserUpdated }) {
             <button className={`nav-item ${activePage === "Reports" ? "nav-active" : ""}`} onClick={() => navigate("Reports")}><FileText size={18} /><span>Reports</span><span className="nav-count">{reports.length}</span></button>
             <button className={`nav-item ${activePage === "Projects" ? "nav-active" : ""}`} onClick={() => navigate("Projects")}><FolderKanban size={18} /><span>Projects</span></button>
           </>}
+          {isProjectManager && <button className={`nav-item ${activePage === "Reports" ? "nav-active" : ""}`} onClick={() => navigate("Reports")}><FileText size={18} /><span>Project reports</span><span className="nav-count">{reports.length}</span></button>}
           {isAdministrator && <button className={`nav-item ${activePage === "Manpower" ? "nav-active" : ""}`} onClick={() => navigate("Manpower")}><UsersRound size={18} /><span>Manpower</span><span className="nav-count">{manpower.length}</span></button>}
-          {isAdministrator && <button className={`nav-item ${activePage === "Settings" ? "nav-active" : ""}`} onClick={() => navigate("Settings")}><Settings size={18} /><span>Settings</span></button>}
+          {isSuperUser && <button className={`nav-item ${activePage === "Settings" ? "nav-active" : ""}`} onClick={() => navigate("Settings")}><Settings size={18} /><span>Settings</span></button>}
         </nav>
 
-        {isAdministrator && <>
-          <div className="nav-label project-nav-label">YOUR PROJECTS <button aria-label="Add project" onClick={() => openProjectForm()}><Plus size={15} /></button></div>
+        {canManageProjectReports && <>
+          <div className="nav-label project-nav-label">YOUR PROJECTS {isAdministrator && <button aria-label="Add project" onClick={() => openProjectForm()}><Plus size={15} /></button>}</div>
           <nav className="project-nav" aria-label="Projects">
             {projectsWithReports.map((project) => (
               <button key={project.id} className={`nav-item project-nav-item ${projectFilter === project.id ? "nav-active" : ""}`} onClick={() => { setProjectFilter(project.id); navigate("Reports"); }}>
@@ -841,7 +1173,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
           <button className="nav-item support-link" onClick={() => setNotice("Help center integration coming soon.")}><CircleHelp size={18} /><span>Help & support</span></button>
           <div className="sidebar-user">
             <div className="user-avatar">{userInitials}</div>
-            <div className="user-details"><strong>{currentUser}</strong><small>{isAdministrator ? "Administrator" : `Punch ID ${user.punchId}`}</small></div>
+            <div className="user-details"><strong>{currentUser}</strong><small>{isSuperUser ? "Super User" : isAdministrator ? "Appointed Admin" : isProjectManager ? "Project Manager" : `Punch ID ${user.punchId}`}</small></div>
             <button className="user-more" aria-label="Sign out" title="Sign out" onClick={requestLogout}><LogOut size={16} /></button>
           </div>
         </div>
@@ -866,8 +1198,8 @@ function Workspace({ user, onLogout, onUserUpdated }) {
                 <span className="user-avatar small-avatar">{userInitials}</span><ChevronDown size={15} />
               </button>
               {isProfileMenuOpen && <div className="top-profile-dropdown" role="dialog" aria-label="Account options">
-                <div className="top-profile-summary"><strong>{currentUser}</strong><small>{isAdministrator ? "Administrator" : `Punch ID ${user.punchId}`}</small></div>
-                {isAdministrator && <button className="top-profile-action" type="button" onClick={() => navigate("Settings")}><Settings size={16} /> Account settings</button>}
+                <div className="top-profile-summary"><strong>{currentUser}</strong><small>{isSuperUser ? "Super User" : isAdministrator ? "Appointed Admin" : isProjectManager ? "Project Manager" : `Punch ID ${user.punchId}`}</small></div>
+                {isSuperUser && <button className="top-profile-action" type="button" onClick={() => navigate("Settings")}><Settings size={16} /> Account settings</button>}
                 <button className="top-profile-logout" type="button" onClick={requestLogout}><LogOut size={16} /> Sign out</button>
               </div>}
             </div>
@@ -879,8 +1211,26 @@ function Workspace({ user, onLogout, onUserUpdated }) {
             {isDataLoading ? (
             <div className="auth-loading" role="status">Loading workspace data…</div>
           ) : activePage === "Manpower" && isAdministrator ? (
-            <ManpowerPage people={filteredManpower} total={manpower.length} query={manpowerSearch} onSearch={setManpowerSearch} onAdd={() => openManpowerForm()} onEdit={openManpowerForm} onToggleActive={toggleManpowerActive} onViewReports={openEmployeeReportLog} />
-          ) : activePage === "Settings" && isAdministrator ? (
+            <ManpowerPage
+              people={filteredManpower}
+              total={manpower.length}
+              query={manpowerSearch}
+              canManageAdminAccess={isSuperUser}
+              canDeleteAccounts={isSuperUser}
+              updatingAdminAccessPunchId={updatingAdminAccessPunchId}
+              deletingManpowerPunchId={deletingManpowerPunchId}
+              onSearch={setManpowerSearch}
+              onAdd={() => openManpowerForm()}
+              onEdit={openManpowerForm}
+              onToggleActive={toggleManpowerActive}
+              onToggleAdminAccess={toggleManpowerAdminAccess}
+              onAssignProjectManager={assignProjectManager}
+              onDeletePerson={deleteManpowerAccount}
+              onViewReports={openEmployeeReportLog}
+              projects={projects}
+              assigningProjectManagerPunchId={assigningProjectManagerPunchId}
+            />
+          ) : activePage === "Settings" && isSuperUser ? (
             <AdminSettingsPage
               profileForm={profileForm}
               setProfileForm={setProfileForm}
@@ -901,6 +1251,8 @@ function Workspace({ user, onLogout, onUserUpdated }) {
               onEdit={openProjectForm}
               onDelete={deleteProject}
               canManage={isAdministrator}
+              canExport={canManageProjectReports}
+              onExport={exportProjectReports}
             />
           ) : (
             <>
@@ -910,21 +1262,25 @@ function Workspace({ user, onLogout, onUserUpdated }) {
                   {isAdministrator && activePage === "Overview" ? <div className="overview-heading-title">
                     <h1>{timeGreeting}, {greetingName}</h1>
                     <span className="overview-clock"><Clock3 size={15} /><time dateTime={clockNow.toISOString()}>{clockTime}<span> · {clockDate}</span></time></span>
-                  </div> : <h1>{!isAdministrator ? "My report log" : activePage === "Overview" ? `Good morning, ${greetingName}` : "Reports"}</h1>}
-                  <p>{!isAdministrator ? "Review your submitted reports, organized by report date." : activePage === "Overview" ? "A clear view of updates across all your projects." : "Browse, filter, and download reports shared by your team."}</p>
+                  </div> : <h1>{isProjectManager
+                    ? projects[0]?.name || "Project reports"
+                    : !isAdministrator ? "My report log" : activePage === "Overview" ? `Good morning, ${greetingName}` : "Reports"}</h1>}
+                  <p>{isProjectManager
+                    ? "Manage reports in your assigned project folder."
+                    : !isAdministrator ? "Review your submitted reports, organized by report date." : activePage === "Overview" ? "A clear view of updates across all your projects." : "Browse, filter, and download reports shared by your team."}</p>
                 </div>
                 <button className="button button-primary" onClick={openUpload}><Upload size={17} /> Upload report</button>
               </section>
 
               {activePage === "Overview" && <SummaryCards reports={reports} projects={projectsWithReports} onSelect={(kind) => setSummaryPopover({ kind })} />}
 
-              {activePage === "Reports" && isAdministrator && <section className="project-report-folder-section" aria-labelledby="project-report-folders-title">
+              {activePage === "Reports" && canManageProjectReports && <section className="project-report-folder-section" aria-labelledby="project-report-folders-title">
                 <div className="section-heading">
                   <div>
                     <h2 id="project-report-folders-title">Project folders</h2>
-                    <p>Select a project folder to view its reports</p>
+                    <p>{isProjectManager ? "Your assigned project folder" : "Select a project folder to view its reports"}</p>
                   </div>
-                  {projectFilter !== "all" && <button className="text-button" type="button" onClick={() => setProjectFilter("all")}>All project reports <ArrowUpRight size={15} /></button>}
+                  {projectFilter !== "all" && isAdministrator && <button className="text-button" type="button" onClick={() => setProjectFilter("all")}>All project reports <ArrowUpRight size={15} /></button>}
                 </div>
                 {projectsWithReports.length ? <div className="project-report-folders">
                   {projectsWithReports.map((project) => (
@@ -937,7 +1293,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
                       onClick={() => setProjectFilter(project.id)}
                     >
                       <span className={`project-report-folder-icon card-${project.color}`}><Folder size={19} /></span>
-                      <span className="project-report-folder-copy"><strong>{project.name}</strong><small>{projectReportCounts.get(project.id) || 0} reports</small></span>
+                      <span className="project-report-folder-copy"><strong>{project.name}</strong><small>{projectReportCounts.get(project.id) || 0} reports{project.managerName ? ` · Manager: ${project.managerName}` : ""}</small></span>
                     </button>
                   ))}
                 </div> : <p className="project-report-folders-empty">Create a project to start organizing reports into folders.</p>}
@@ -946,15 +1302,27 @@ function Workspace({ user, onLogout, onUserUpdated }) {
               <section className="report-section" id="report-log">
                 <div className="section-heading">
                   <div>
-                    <h2>{!isAdministrator ? "Dated report log" : projectFilter === "all" ? "Recent reports" : projects.find((project) => project.id === projectFilter)?.name}</h2>
-                    <p>{filteredReports.length} reports {!isAdministrator ? "in your history" : projectFilter !== "all" ? "in this project" : "across your projects"}</p>
+                    <h2>{!canManageProjectReports ? "Dated report log" : projectFilter === "all" ? "Recent reports" : projects.find((project) => project.id === projectFilter)?.name}</h2>
+                    <p>{filteredReports.length} reports {!canManageProjectReports ? "in your history" : projectFilter !== "all" ? "in this project" : "across your projects"}</p>
                   </div>
+                  {canManageProjectReports && projectFilter !== "all" && projects.find((project) => project.id === projectFilter) && <button className="button button-secondary" type="button" onClick={() => exportProjectReports(projects.find((project) => project.id === projectFilter))}><ArrowDownToLine size={15} /> Export project ZIP</button>}
                   {activePage === "Overview" && isAdministrator && <button className="text-button" onClick={() => navigate("Reports")}>View all reports <ArrowUpRight size={15} /></button>}
                 </div>
+                {isSuperUser && <div className="report-selection-toolbar">
+                  <span>{selectedReportIds.length
+                    ? `${selectedReportIds.length} selected across report filters`
+                    : `Select reports to permanently clear them and their evidence files. Ctrl+A / ⌘A selects all ${reports.length} active reports.`}</span>
+                  <button type="button" className="button button-secondary" onClick={toggleSelectAllReports} disabled={!reports.length || isDeletingReports}>
+                    {allReportsSelected ? "Clear selection" : `Select all ${reports.length} reports`}
+                  </button>
+                  <button type="button" className="button button-danger" onClick={deleteSelectedReports} disabled={!selectedReportIds.length || isDeletingReports}>
+                    <Trash2 size={15} />{isDeletingReports ? "Deleting…" : `Delete selected${selectedReportIds.length ? ` (${selectedReportIds.length})` : ""}`}
+                  </button>
+                </div>}
 
                 <div className="filters">
                   <label className="search-field"><Search size={17} /><input aria-label="Search reports" placeholder="Search reports..." value={search} onChange={(event) => setSearch(event.target.value)} /><kbd>⌘ K</kbd></label>
-                  <label className="select-field"><BriefcaseBusiness size={16} /><select aria-label="Filter by project" value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>{projectOptions.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><ChevronDown size={15} /></label>
+                  {!isProjectManager && <label className="select-field"><BriefcaseBusiness size={16} /><select aria-label="Filter by project" value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>{projectOptions.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><ChevronDown size={15} /></label>}
                   <label className="date-filter"><CalendarDays size={16} /><span>From</span><input aria-label="Filter reports from date" type="date" value={dateFromFilter} aria-invalid={hasInvalidDateRange} onChange={(event) => setDateFromFilter(event.target.value)} />{dateFromFilter && <button type="button" aria-label="Clear start date" onClick={() => setDateFromFilter("")}><X size={14} /></button>}</label>
                   <label className="date-filter"><CalendarDays size={16} /><span>To</span><input aria-label="Filter reports to date" type="date" value={dateToFilter} aria-invalid={hasInvalidDateRange} onChange={(event) => setDateToFilter(event.target.value)} />{dateToFilter && <button type="button" aria-label="Clear end date" onClick={() => setDateToFilter("")}><X size={14} /></button>}</label>
                   {hasInvalidDateRange && <p className="filter-validation" role="alert">Start date must be on or before end date.</p>}
@@ -965,39 +1333,52 @@ function Workspace({ user, onLogout, onUserUpdated }) {
                     key={report.id}
                     report={report}
                     project={projects.find((item) => item.id === report.projectId)}
-                    isAdministrator={isAdministrator}
+                    isAdministrator={canManageProjectReports}
+                    canDelete={isSuperUser}
+                    canManage={canManageProjectReports}
+                    isSelected={selectedReportIds.includes(report.id)}
                     onOpen={() => setSelectedReport(report)}
+                    onEdit={() => setEditingReport(report)}
                     onDownload={downloadReport}
                     onArchive={archiveReport}
+                    onToggleSelection={(selected) => toggleReportSelection(report.id, selected)}
                   />)}
-                  {filteredReports.length === 0 && <div className="mobile-report-empty"><FileText size={22} /><strong>{isAdministrator ? "No reports found" : "Your report log is empty"}</strong><span>{isAdministrator ? "Try changing your filters or upload a new report." : "Once you submit a report, it will appear here by date."}</span><button className="button button-secondary" onClick={openUpload}><Plus size={16} /> Upload a report</button></div>}
+                  {filteredReports.length === 0 && <div className="mobile-report-empty"><FileText size={22} /><strong>{canManageProjectReports ? "No reports found" : "Your report log is empty"}</strong><span>{canManageProjectReports ? "Try changing your filters or upload a new report." : "Once you submit a report, it will appear here by date."}</span><button className="button button-secondary" onClick={openUpload}><Plus size={16} /> Upload a report</button></div>}
                 </div>
 
                 <div className="table-wrap desktop-report-table">
                   <table className="report-history-table">
-                    <thead><tr><th>TITLE</th><th>DESCRIPTION</th><th>PROJECT</th>{isAdministrator && <th>UPLOADED BY</th>}<th>DATE</th><th>FILE</th><th><span className="sr-only">Actions</span></th></tr></thead>
+                    <thead><tr>{isSuperUser && <th><span className="sr-only">Select report</span></th>}<th>TITLE</th><th>DESCRIPTION</th><th>PROJECT</th>{canManageProjectReports && <th>UPLOADED BY</th>}<th>DATE</th><th>FILE</th><th><span className="sr-only">Actions</span></th></tr></thead>
                     <tbody>
                       {filteredReports.map((report) => {
                         const project = projects.find((item) => item.id === report.projectId);
                         return <tr key={report.id}>
+                          {isSuperUser && <td data-label="Select"><input
+                            className="report-selection-checkbox"
+                            type="checkbox"
+                            aria-label={`Select ${report.title} for permanent deletion`}
+                            checked={selectedReportIds.includes(report.id)}
+                            onChange={(event) => toggleReportSelection(report.id, event.target.checked)}
+                          /></td>}
                           <td className="report-cell" data-label="Title"><span className="file-icon"><FileText size={18} /></span><button className="report-copy report-open" onClick={() => setSelectedReport(report)} aria-label={`View details for ${report.title}`}><strong>{report.title}</strong></button></td>
                           <td className="report-description-cell" data-label="Description"><span>{report.description || "—"}</span></td>
                           <td data-label="Project"><span className={`project-tag tag-${project?.color}`}>{project?.shortName}</span></td>
-                          {isAdministrator && <td data-label="Uploaded by"><span className="uploader"><span className="mini-avatar">{report.user.split(" ").map((part) => part[0]).join("")}</span>{report.user}</span></td>}
+                          {canManageProjectReports && <td data-label="Uploaded by"><span className="uploader"><span className="mini-avatar">{report.user.split(" ").map((part) => part[0]).join("")}</span>{report.user}</span></td>}
                           <td className="date-cell" data-label="Date">{formatDate(report.date)}</td>
                           <td data-label="Files"><span className="file-meta"><span>{report.files?.length > 1 ? `${report.files.length} files` : report.type}</span>{report.files?.length > 1 ? "Multiple" : report.fileSize}</span></td>
                           <td className="report-action-cell"><div className="report-actions">
                             <button className="download-button" aria-label={`Details for ${report.title}`} title="Report details" onClick={() => setSelectedReport(report)}><Info size={16} /></button>
                             <button className="download-button" aria-label={`Download PDF and evidence ZIP for ${report.title}`} title="Download PDF and evidence ZIP" onClick={() => downloadReport(report)}><ArrowDownToLine size={17} /></button>
-                            {isAdministrator && <button className="download-button" aria-label={`Archive ${report.title}`} title="Archive report" onClick={() => archiveReport(report)}><Archive size={16} /></button>}
+                            {canManageProjectReports && <button className="download-button" aria-label={`Edit ${report.title}`} title="Edit report" onClick={() => setEditingReport(report)}><Pencil size={15} /></button>}
+                            {canManageProjectReports && <button className="download-button" aria-label={`Archive ${report.title}`} title="Archive report" onClick={() => archiveReport(report)}><Archive size={16} /></button>}
                           </div></td>
                         </tr>;
                       })}
-                      {filteredReports.length === 0 && <tr><td className="empty-state" colSpan={isAdministrator ? 7 : 6}><span className="empty-icon"><File size={20} /></span><strong>{isAdministrator ? "No reports found" : "Your report log is empty"}</strong><span>{isAdministrator ? "Try changing your filters or upload a new report." : "Once you submit a report, it will appear here by date."}</span><button className="button button-secondary" onClick={openUpload}><Plus size={16} /> Upload a report</button></td></tr>}
+                      {filteredReports.length === 0 && <tr><td className="empty-state" colSpan={(canManageProjectReports ? 7 : 6) + (isSuperUser ? 1 : 0)}><span className="empty-icon"><File size={20} /></span><strong>{canManageProjectReports ? "No reports found" : "Your report log is empty"}</strong><span>{canManageProjectReports ? "Try changing your filters or upload a new report." : "Once you submit a report, it will appear here by date."}</span><button className="button button-secondary" onClick={openUpload}><Plus size={16} /> Upload a report</button></td></tr>}
                     </tbody>
                   </table>
                 </div>
-                <div className="table-footer"><span>Showing <strong>{filteredReports.length}</strong> of <strong>{reports.length}</strong> reports</span><span className="table-footer-note">{isAdministrator ? <><UsersRound size={15} /> Shared workspace</> : <><ShieldCheck size={15} /> Only you and administrators can see these reports</>}</span></div>
+                <div className="table-footer"><span>Showing <strong>{filteredReports.length}</strong> of <strong>{reports.length}</strong> reports</span><span className="table-footer-note">{canManageProjectReports ? <><UsersRound size={15} /> {isProjectManager ? "Assigned project workspace" : "Shared workspace"}</> : <><ShieldCheck size={15} /> Only you and administrators can see these reports</>}</span></div>
               </section>
 
               <div className="integration-note"><ShieldCheck size={17} /><span><strong>One login for every project.</strong> Reports are stored on this server and shared with authenticated project users.</span><button onClick={() => setNotice("Email notifications can be configured by the administrator.")}>Notifications <ArrowUpRight size={14} /></button></div>
@@ -1131,7 +1512,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
 
       {selectedReport && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedReport(null); }}>
         <section className="upload-modal report-detail-modal" role="dialog" aria-modal="true" aria-labelledby="report-detail-title">
-          <div className="modal-heading"><div><span className="modal-icon"><FileText size={19} /></span><div><h2 id="report-detail-title">{selectedReport.title}</h2><p>Report details and attached document</p></div></div><button className="icon-button" aria-label="Close report details" onClick={() => setSelectedReport(null)}><X size={19} /></button></div>
+          <div className="modal-heading"><div><span className="modal-icon"><FileText size={19} /></span><div><h2 id="report-detail-title">{selectedReport.title}</h2><p>Report details and attached document</p></div></div><div className="report-detail-heading-actions">{canManageProjectReports && <button type="button" className="button button-secondary" onClick={() => setEditingReport(selectedReport)}><Pencil size={15} /> Edit report</button>}<button className="icon-button" aria-label="Close report details" onClick={() => setSelectedReport(null)}><X size={19} /></button></div></div>
           <dl className="report-detail-grid">
             <div><dt>Project</dt><dd>{selectedReport.projectName || projects.find((item) => item.id === selectedReport.projectId)?.name || "Project"}</dd></div>
             <div><dt>Report date</dt><dd>{formatDate(selectedReport.date)}</dd></div>
@@ -1142,6 +1523,14 @@ function Workspace({ user, onLogout, onUserUpdated }) {
           <ReportAttachments report={selectedReport} onDownload={downloadReport} />
         </section>
       </div>}
+      {editingReport && <ReportEditModal
+        key={editingReport.id}
+        report={editingReport}
+        maxUploadBytes={maxUploadBytes}
+        isSaving={isSavingReport}
+        onClose={() => setEditingReport(null)}
+        onSave={saveReportEdit}
+      />}
 
       {isProjectFormOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsProjectFormOpen(false); }}>
         <section className="upload-modal project-modal" role="dialog" aria-modal="true" aria-labelledby="project-form-title">
@@ -1210,10 +1599,14 @@ function Workspace({ user, onLogout, onUserUpdated }) {
   );
 }
 
-function MobileReportCard({ report, project, isAdministrator, onOpen, onDownload, onArchive }) {
+function MobileReportCard({ report, project, isAdministrator, canDelete, canManage, isSelected, onOpen, onEdit, onDownload, onArchive, onToggleSelection }) {
   const attachments = report.files?.length ? report.files : [report];
 
   return <article className="mobile-report-card">
+    {canDelete && <label className="report-selection-control">
+      <input type="checkbox" checked={isSelected} onChange={(event) => onToggleSelection(event.target.checked)} />
+      <span>Select for deletion</span>
+    </label>}
     <div className="mobile-report-card-heading">
       <div className="mobile-report-card-title">
         <h3>{report.title}</h3>
@@ -1236,6 +1629,7 @@ function MobileReportCard({ report, project, isAdministrator, onOpen, onDownload
     <div className="mobile-report-card-actions">
       <button type="button" className="button button-secondary" onClick={onOpen}><Info size={15} /> Details</button>
       <button type="button" className="button button-primary" title="ZIP contains report.pdf and all evidence attachments" aria-label={`Download PDF and evidence ZIP for ${report.title}`} onClick={() => onDownload(report)}><ArrowDownToLine size={15} /> PDF + evidence ZIP</button>
+      {canManage && <button type="button" className="download-button" onClick={onEdit} aria-label={`Edit ${report.title}`} title="Edit report"><Pencil size={15} /></button>}
       {isAdministrator && <button type="button" className="download-button" onClick={() => onArchive(report)} aria-label={`Archive ${report.title}`} title="Archive report"><Archive size={16} /></button>}
     </div>
   </article>;
@@ -1293,7 +1687,7 @@ function AdminSettingsPage({ profileForm, setProfileForm, profileError, isSaving
   </section>;
 }
 
-function ProjectsPage({ projects: projectList, reports, onSelect, onCreate, onEdit, onDelete, canManage }) {
+function ProjectsPage({ projects: projectList, reports, onSelect, onCreate, onEdit, onDelete, canManage, canExport, onExport }) {
   return <section className="projects-page">
     <div className="page-heading">
       <div><div className="eyebrow"><span className="eyebrow-dot" /> WORKSPACE</div><h1>Your projects</h1><p>Choose a project to see its reports and updates.</p></div>
@@ -1305,8 +1699,10 @@ function ProjectsPage({ projects: projectList, reports, onSelect, onCreate, onEd
         <button className="project-card-open" onClick={() => onSelect(project.id)} aria-label={`Open ${project.name} reports`}>
           <span className={`project-card-icon card-${project.color}`}><FolderKanban size={20} /></span>
           <strong>{project.name}</strong><span className="project-card-location">{project.description || "Construction project"}</span>
+          {project.managerName && <span className="project-card-manager">Project Manager: {project.managerName}</span>}
           <span className="project-card-meta"><FileText size={15} /> {count} {count === 1 ? "report" : "reports"} <span className="project-card-status"><span className="trend-dot" /> Active</span></span>
         </button>
+        {canExport && <button className="project-card-export" aria-label={`Export ${project.name} reports`} title="Export reports ZIP" onClick={() => onExport(project)}><ArrowDownToLine size={15} /></button>}
         {canManage && <>
           <button className="project-card-edit" aria-label={`Edit ${project.name}`} title="Edit project" onClick={() => onEdit(project)}><Pencil size={15} /></button>
           <button className="project-card-delete" aria-label={`Delete ${project.name}`} title="Delete project" onClick={() => onDelete(project)}><Trash2 size={15} /></button>
@@ -1317,16 +1713,38 @@ function ProjectsPage({ projects: projectList, reports, onSelect, onCreate, onEd
   </section>;
 }
 
-function ManpowerPage({ people, total, query, onSearch, onAdd, onEdit, onToggleActive, onViewReports }) {
+function ManpowerPage({
+  people,
+  total,
+  query,
+  canManageAdminAccess,
+  canDeleteAccounts,
+  projects,
+  assigningProjectManagerPunchId,
+  updatingAdminAccessPunchId,
+  deletingManpowerPunchId,
+  onSearch,
+  onAdd,
+  onEdit,
+  onToggleActive,
+  onToggleAdminAccess,
+  onAssignProjectManager,
+  onDeletePerson,
+  onViewReports,
+}) {
   return <section className="manpower-page">
     <div className="page-heading">
       <div>
         <div className="eyebrow"><span className="eyebrow-dot" /> ACCOUNT MANAGEMENT</div>
         <h1>Manpower accounts</h1>
-        <p>Existing employees indexed by their Punch ID.</p>
+        <p>Manage employee accounts and administrator access.</p>
       </div>
       <button className="button button-primary" onClick={onAdd}><Plus size={17} /> Add manpower</button>
     </div>
+    <aside className="admin-rights-note" aria-label="Administrator permissions">
+      <ShieldCheck size={17} />
+      <span><strong>Admins can view and download all reports, manage projects and manpower accounts, and archive reports.</strong> Assign an active employee to manage one project; that Project Manager can upload, edit, archive, and export reports in that project only. Only the Super User can manage admin access and account settings, and permanently delete employee or appointed admin accounts. Deleted users' reports and uploader attribution are preserved. The Super User cannot be changed by appointed admins. Appointed admins sign in with Punch ID only, so grant access only to trusted users.</span>
+    </aside>
     <section className="report-section" aria-labelledby="manpower-list-heading">
       <div className="section-heading">
         <div><h2 id="manpower-list-heading">Employee directory</h2><p>{people.length} of {total} manpower accounts</p></div>
@@ -1336,20 +1754,69 @@ function ManpowerPage({ people, total, query, onSearch, onAdd, onEdit, onToggleA
       </div>
       <div className="table-wrap">
         <table className="manpower-table">
-          <thead><tr><th>PUNCH ID</th><th>EMPLOYEE NAME</th><th>DESIGNATION</th><th>ACCOUNT</th><th><span className="sr-only">Actions</span></th></tr></thead>
+          <thead><tr><th>PUNCH ID</th><th>EMPLOYEE NAME</th><th>DESIGNATION</th><th>ADMIN ACCESS</th><th>PROJECT MANAGER</th><th>ACCOUNT</th><th><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
             {people.map((person) => <tr key={person.punchId}>
               <td><span className="punch-id">{person.punchId}</span></td>
               <td className="manpower-name">{person.name}</td>
               <td>{person.designation}</td>
-              <td><button type="button" className={`directory-status ${person.active ? "" : "directory-status-inactive"}`} aria-label={`Mark ${person.name} ${person.active ? "inactive" : "active"}`} aria-pressed={person.active} onClick={() => onToggleActive(person)}><span />{person.active ? "Active" : "Inactive"}</button></td>
-              <td><div className="report-actions"><button className="download-button" aria-label={`View ${person.name}'s report log`} title="View report log" onClick={() => onViewReports(person)}><FileText size={15} /></button><button className="download-button" aria-label={`Edit ${person.name}`} title="Edit account" onClick={() => onEdit(person)}><Pencil size={15} /></button></div></td>
+              <td>
+                <button
+                  type="button"
+                  className={`admin-access-control ${person.adminAccess ? "admin-access-enabled" : ""}`}
+                  role="switch"
+                  aria-checked={person.adminAccess}
+                  aria-label={`${person.adminAccess ? "Remove admin access from" : "Grant admin access to"} ${person.name}`}
+                  title={!canManageAdminAccess
+                    ? "Only the Super User can change admin access"
+                    : !person.active && !person.adminAccess
+                      ? "Activate this account before granting admin access"
+                      : "Toggle admin access"}
+                  disabled={!canManageAdminAccess || (!person.active && !person.adminAccess) || updatingAdminAccessPunchId !== null}
+                  onClick={() => onToggleAdminAccess(person)}
+                >
+                  <span className="admin-access-track" aria-hidden="true"><span /></span>
+                  <span>{person.adminAccess ? "Admin" : "Employee"}</span>
+                </button>
+              </td>
+              <td>
+                <select
+                  className="project-manager-select"
+                  aria-label={`Assign ${person.name} as Project Manager`}
+                  value={person.projectManagerProjectId || ""}
+                  disabled={person.adminAccess || !person.active || assigningProjectManagerPunchId !== null}
+                  onChange={(event) => onAssignProjectManager(person, event.target.value)}
+                >
+                  <option value="">Not assigned</option>
+                  {projects.filter((project) => !project.managerPunchId || project.managerPunchId === person.punchId).map((project) => (
+                    <option key={project.id} value={project.id}>{project.name}</option>
+                  ))}
+                </select>
+                {person.projectManagerProjectName && <small className="project-manager-assignment">Manages {person.projectManagerProjectName}</small>}
+              </td>
+              <td>
+                {person.adminAccess
+                  ? <span className={`directory-status directory-status-static ${person.active ? "" : "directory-status-inactive"}`}><span />{person.active ? "Active" : "Inactive"}</span>
+                  : <button type="button" className={`directory-status ${person.active ? "" : "directory-status-inactive"}`} aria-label={`Mark ${person.name} ${person.active ? "inactive" : "active"}`} aria-pressed={person.active} onClick={() => onToggleActive(person)}><span />{person.active ? "Active" : "Inactive"}</button>}
+              </td>
+              <td><div className="report-actions">
+                <button className="download-button" aria-label={`View ${person.name}'s report log`} title="View report log" onClick={() => onViewReports(person)}><FileText size={15} /></button>
+                {!person.adminAccess && <button className="download-button" aria-label={`Edit ${person.name}`} title="Edit account" onClick={() => onEdit(person)}><Pencil size={15} /></button>}
+                {canDeleteAccounts && <button
+                  type="button"
+                  className="download-button delete-account-button"
+                  aria-label={`Delete ${person.adminAccess ? "administrator" : "employee"} ${person.name}`}
+                  title={`Delete ${person.adminAccess ? "administrator" : "employee"} account`}
+                  disabled={deletingManpowerPunchId !== null}
+                  onClick={() => onDeletePerson(person)}
+                ><Trash2 size={15} /></button>}
+              </div></td>
             </tr>)}
-            {people.length === 0 && <tr><td className="empty-state" colSpan="5"><span className="empty-icon"><UsersRound size={20} /></span><strong>No manpower found</strong><span>Try a different search or add a manpower account.</span><button className="button button-secondary" onClick={onAdd}><Plus size={16} /> Add manpower</button></td></tr>}
+            {people.length === 0 && <tr><td className="empty-state" colSpan="7"><span className="empty-icon"><UsersRound size={20} /></span><strong>No manpower found</strong><span>Try a different search or add a manpower account.</span><button className="button button-secondary" onClick={onAdd}><Plus size={16} /> Add manpower</button></td></tr>}
           </tbody>
         </table>
       </div>
-      <div className="table-footer"><span>Showing <strong>{people.length}</strong> of <strong>{total}</strong> accounts</span><span className="table-footer-note"><ShieldCheck size={15} /> Status changes are temporary until connected to the server</span></div>
+      <div className="table-footer"><span>Showing <strong>{people.length}</strong> of <strong>{total}</strong> accounts</span><span className="table-footer-note"><ShieldCheck size={15} /> Admin access is Super User controlled</span></div>
     </section>
   </section>;
 }

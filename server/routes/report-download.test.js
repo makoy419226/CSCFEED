@@ -89,6 +89,34 @@ function createDb(role, report, attachments = []) {
   };
 }
 
+function createProjectExportDb(projectManagerProjectId, reportRows, attachmentRows) {
+  let selectCalls = 0;
+  return {
+    select() {
+      const call = ++selectCalls;
+      return {
+        from() { return this; },
+        innerJoin() { return this; },
+        leftJoin() { return this; },
+        where() { return this; },
+        async limit() {
+          return [{
+            id: 8,
+            name: "Project Manager",
+            role: "employee",
+            punchId: "2468",
+            username: "2468",
+            projectManagerProjectId: String(projectManagerProjectId),
+          }];
+        },
+        async orderBy() {
+          return call === 2 ? reportRows : attachmentRows;
+        },
+      };
+    },
+  };
+}
+
 async function createStoredFile(contents) {
   const storageKey = randomUUID();
   const filePath = getStoredFilePath(storageKey);
@@ -97,7 +125,7 @@ async function createStoredFile(contents) {
   return storageKey;
 }
 
-async function withReportsApp(db, request) {
+async function withReportsApp(db, request, resourcePath = "/19/download") {
   const app = express();
   app.use("/api/reports", createReportsRouter({ db, maxUploadBytes: 1024 }));
   app.use(handleError);
@@ -106,7 +134,7 @@ async function withReportsApp(db, request) {
 
   try {
     const { port } = server.address();
-    return await request(() => fetch(`http://127.0.0.1:${port}/api/reports/19/download`, {
+    return await request(() => fetch(`http://127.0.0.1:${port}/api/reports${resourcePath}`, {
       headers: { cookie: "cscfeed_session=test-session" },
     }));
   } finally {
@@ -175,4 +203,56 @@ test("employees cannot download a report package they do not own", async () => {
     const reportFilter = db.whereConditions.find(({ call }) => call === 2);
     assert.ok(reportFilter);
   });
+});
+
+test("Project Manager project export includes a PDF and evidence for each assigned-project report", async () => {
+  const firstKey = await createStoredFile("first project evidence");
+  const secondKey = await createStoredFile("second project evidence");
+  const reportRows = [
+    {
+      id: 21,
+      projectId: 5,
+      projectName: "Project A",
+      title: "Daily progress",
+      description: "First report",
+      uploaderName: "Site Employee",
+      reportDate: "2026-11-27",
+      fileName: "first.jpg",
+      storageKey: firstKey,
+      fileSizeBytes: 21,
+    },
+    {
+      id: 22,
+      projectId: 5,
+      projectName: "Project A",
+      title: "Equipment update",
+      description: "Second report",
+      uploaderName: "Site Employee",
+      reportDate: "2026-11-26",
+      fileName: "second.pdf",
+      storageKey: secondKey,
+      fileSizeBytes: 22,
+    },
+  ];
+  const attachmentRows = [
+    { id: 31, reportId: 21, fileName: "first.jpg", storageKey: firstKey, fileSizeBytes: 21 },
+    { id: 32, reportId: 22, fileName: "second.pdf", storageKey: secondKey, fileSizeBytes: 22 },
+  ];
+
+  await withReportsApp(
+    createProjectExportDb(5, reportRows, attachmentRows),
+    async (get) => {
+      const response = await get();
+      const archive = Buffer.from(await response.arrayBuffer());
+      const entries = readZipEntries(archive);
+
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("content-disposition"), /Project_A-reports\.zip/);
+      assert.equal(entries.get("21-Daily_progress/report.pdf").subarray(0, 5).toString(), "%PDF-");
+      assert.equal(entries.get("21-Daily_progress/evidence/first.jpg").toString(), "first project evidence");
+      assert.equal(entries.get("22-Equipment_update/report.pdf").subarray(0, 5).toString(), "%PDF-");
+      assert.equal(entries.get("22-Equipment_update/evidence/second.pdf").toString(), "second project evidence");
+    },
+    "/project/5/export",
+  );
 });

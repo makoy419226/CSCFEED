@@ -67,7 +67,7 @@ export default function Login({ onLogin, serviceMessage = "" }) {
       }
 
       const role = account.role.toLowerCase();
-      if ((mode === "administrator" && role !== "admin") || (mode === "employee" && role === "admin")) {
+      if ((mode === "administrator" && role !== "super_admin") || (mode === "employee" && role === "super_admin")) {
         setError(mode === "administrator"
           ? "This account does not have administrator access."
           : "Use administrator sign-in for this account.");
@@ -78,6 +78,7 @@ export default function Login({ onLogin, serviceMessage = "" }) {
         name: account.name || account.username,
         role,
         punchId: account.punchId || account.username || employeeId,
+        projectManagerProjectId: account.projectManagerProjectId || null,
       });
     } catch (requestError) {
       setError(requestError instanceof Error

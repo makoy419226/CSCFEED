@@ -1,7 +1,22 @@
 import { and, eq, gt } from "drizzle-orm";
-import { accounts, authCredentials, authSessions } from "../src/db/schema.js";
+import { accounts, authCredentials, authSessions, projects } from "../src/db/schema.js";
 import { HttpError, asyncRoute } from "./errors.js";
 import { createTokenHash } from "./session-cookie.js";
+
+export const superUserRole = "super_admin";
+
+export function hasAdminAccess(role) {
+  return role === "admin" || role === superUserRole;
+}
+
+export function hasProjectManagerAccess(identity) {
+  return Boolean(identity?.projectManagerProjectId);
+}
+
+export function canManageProjectReports(identity, projectId) {
+  return hasAdminAccess(identity?.role)
+    || (hasProjectManagerAccess(identity) && Number(identity.projectManagerProjectId) === Number(projectId));
+}
 
 export function readSessionToken(req) {
   const prefix = "cscfeed_session=";
@@ -9,6 +24,20 @@ export function readSessionToken(req) {
     .map((cookie) => cookie.trim())
     .find((cookie) => cookie.startsWith(prefix));
   return part ? part.slice(prefix.length) : "";
+}
+
+export function requireProjectManager(req, _res, next) {
+  if (!hasProjectManagerAccess(req.identity)) {
+    return next(new HttpError(403, "Project Manager access is required."));
+  }
+  return next();
+}
+
+export function requireProjectReportManager(req, _res, next) {
+  if (!hasAdminAccess(req.identity?.role) && !hasProjectManagerAccess(req.identity)) {
+    return next(new HttpError(403, "Project Manager access is required."));
+  }
+  return next();
 }
 
 export async function resolveIdentity(db, token) {
@@ -21,10 +50,12 @@ export async function resolveIdentity(db, token) {
       role: accounts.accountRole,
       punchId: accounts.punchId,
       username: authCredentials.username,
+      projectManagerProjectId: projects.id,
     })
     .from(authSessions)
     .innerJoin(accounts, eq(accounts.id, authSessions.accountId))
     .leftJoin(authCredentials, eq(authCredentials.accountId, accounts.id))
+    .leftJoin(projects, eq(projects.managerId, accounts.id))
     .where(and(
       eq(authSessions.tokenHash, createTokenHash(token)),
       gt(authSessions.expiresAt, new Date()),
@@ -39,6 +70,7 @@ export async function resolveIdentity(db, token) {
       role: record.role,
       username: record.username || record.punchId,
       punchId: record.punchId,
+      projectManagerProjectId: record.projectManagerProjectId ? String(record.projectManagerProjectId) : null,
     }
     : null;
 }
@@ -53,8 +85,15 @@ export function requireIdentity(db) {
 }
 
 export function requireAdmin(req, _res, next) {
-  if (req.identity?.role !== "admin") {
+  if (!hasAdminAccess(req.identity?.role)) {
     return next(new HttpError(403, "Administrator access is required."));
+  }
+  return next();
+}
+
+export function requireSuperUser(req, _res, next) {
+  if (req.identity?.role !== superUserRole) {
+    return next(new HttpError(403, "Super User access is required."));
   }
   return next();
 }

@@ -1,8 +1,8 @@
 import express from "express";
-import { eq, sql } from "drizzle-orm";
-import { projects, reports } from "../../src/db/schema.js";
+import { and, eq, sql } from "drizzle-orm";
+import { accounts, projects, reports } from "../../src/db/schema.js";
 import { asyncRoute, HttpError } from "../errors.js";
-import { requireAdmin, requireIdentity } from "../identity.js";
+import { hasAdminAccess, requireAdmin, requireIdentity } from "../identity.js";
 import { projectSchema, idParamsSchema } from "../schemas.js";
 import { validate } from "../validation.js";
 
@@ -14,6 +14,8 @@ function toProject(project) {
     description: project.description,
     color: project.color,
     reportCount: project.reportCount ?? 0,
+    managerName: project.managerName || null,
+    managerPunchId: project.managerPunchId || null,
   };
 }
 
@@ -21,10 +23,25 @@ export function createProjectsRouter({ db, ready }) {
   const router = express.Router();
   router.use(requireIdentity(db));
 
-  router.get("/", asyncRoute(async (_req, res) => {
+  router.get("/", asyncRoute(async (req, res) => {
     if (!ready()) throw new HttpError(503, "Project data is not available until the database is ready.");
+    const filters = [eq(projects.active, true)];
+    if (!hasAdminAccess(req.identity.role) && req.identity.projectManagerProjectId) {
+      filters.push(eq(projects.id, Number(req.identity.projectManagerProjectId)));
+    }
     const [rows, reportCounts] = await Promise.all([
-      db.select().from(projects).where(eq(projects.active, true)).orderBy(projects.name),
+      db.select({
+        id: projects.id,
+        name: projects.name,
+        description: projects.description,
+        color: projects.color,
+        managerName: accounts.fullName,
+        managerPunchId: accounts.punchId,
+      })
+        .from(projects)
+        .leftJoin(accounts, eq(accounts.id, projects.managerId))
+        .where(and(...filters))
+        .orderBy(projects.name),
       db.select({ projectId: reports.projectId, count: sql`count(*)::int` }).from(reports).groupBy(reports.projectId),
     ]);
     const countsByProject = new Map(reportCounts.map((item) => [String(item.projectId), Number(item.count)]));

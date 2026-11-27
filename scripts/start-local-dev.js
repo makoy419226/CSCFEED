@@ -429,10 +429,15 @@ async function main() {
     migrationClient = await connectClient(process.env.MIGRATION_DATABASE_URL, "migration");
   }
   try {
-    const migrationSql = await readFile(path.join(root, "database", "migrations", "001_core.sql"), "utf8");
+    const migrationSql = await Promise.all([
+      "001_core.sql",
+      "002_admin_roles.sql",
+      "003_account_and_report_deletion.sql",
+      "004_project_managers.sql",
+    ].map((fileName) => readFile(path.join(root, "database", "migrations", fileName), "utf8")));
     await migrationClient.query("BEGIN");
     try {
-      await migrationClient.query(migrationSql);
+      for (const migration of migrationSql) await migrationClient.query(migration);
       await migrationClient.query("COMMIT");
     } catch (error) {
       await migrationClient.query("ROLLBACK");

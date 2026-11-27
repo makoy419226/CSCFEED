@@ -2,9 +2,9 @@ import bcrypt from "bcryptjs";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import { and, eq, lt, ne } from "drizzle-orm";
-import { accounts, authCredentials, authSessions } from "../../src/db/schema.js";
+import { accounts, authCredentials, authSessions, projects } from "../../src/db/schema.js";
 import { asyncRoute, HttpError } from "../errors.js";
-import { readSessionToken, requireAdmin, requireIdentity, resolveIdentity } from "../identity.js";
+import { readSessionToken, requireIdentity, requireSuperUser, resolveIdentity, superUserRole } from "../identity.js";
 import {
   clearSessionCookie,
   createSessionToken,
@@ -59,15 +59,17 @@ export function createAuthRouter({ db, ready }) {
         role: accounts.accountRole,
         punchId: accounts.punchId,
         active: accounts.active,
+        projectManagerProjectId: projects.id,
         username: authCredentials.username,
         passwordHash: authCredentials.passwordHash,
       })
         .from(authCredentials)
         .innerJoin(accounts, eq(accounts.id, authCredentials.accountId))
+        .leftJoin(projects, eq(projects.managerId, accounts.id))
         .where(eq(authCredentials.username, credentials.username.toLowerCase()))
         .limit(1);
 
-      if (!record || !record.active || record.role !== "admin"
+      if (!record || !record.active || record.role !== superUserRole
         || !(await bcrypt.compare(credentials.password, record.passwordHash))) {
         throw new HttpError(401, "Invalid administrator username or password.");
       }
@@ -78,15 +80,17 @@ export function createAuthRouter({ db, ready }) {
         fullName: accounts.fullName,
         role: accounts.accountRole,
         punchId: accounts.punchId,
+        projectManagerProjectId: projects.id,
       })
         .from(accounts)
+        .leftJoin(projects, eq(projects.managerId, accounts.id))
         .where(and(
           eq(accounts.punchId, credentials.employeeId),
           eq(accounts.active, true),
         ))
         .limit(1);
 
-      if (!record || record.role !== "employee") {
+      if (!record || !["employee", "admin"].includes(record.role)) {
         throw new HttpError(401, "No active employee account matches that Punch ID.");
       }
       account = record;
@@ -109,6 +113,7 @@ export function createAuthRouter({ db, ready }) {
         role: account.role,
         username: account.username || account.punchId,
         punchId: account.punchId,
+        projectManagerProjectId: account.projectManagerProjectId ? String(account.projectManagerProjectId) : null,
       },
     });
   }));
@@ -122,7 +127,7 @@ export function createAuthRouter({ db, ready }) {
     return res.json({ success: true });
   }));
 
-  router.patch("/profile", profileUpdateLimiter, requireIdentity(db), requireAdmin, validate(adminProfileUpdateSchema), asyncRoute(async (req, res) => {
+  router.patch("/profile", profileUpdateLimiter, requireIdentity(db), requireSuperUser, validate(adminProfileUpdateSchema), asyncRoute(async (req, res) => {
     const { displayName, currentPassword, newPassword } = req.validated.body;
     const [credential] = await db.select({ passwordHash: authCredentials.passwordHash })
       .from(authCredentials)

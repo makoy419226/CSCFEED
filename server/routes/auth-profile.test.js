@@ -36,8 +36,8 @@ function createDb(role, passwordHash) {
               id: 1,
               name: "Original Admin",
               role,
-              punchId: role === "admin" ? "0000" : "1234",
-              username: role === "admin" ? "admin" : "employee",
+              punchId: role === "super_admin" ? "0000" : "1234",
+              username: role === "super_admin" ? "admin" : "employee",
             }];
           }
           return [{ passwordHash }];
@@ -98,7 +98,7 @@ async function withAuthApp(db, request) {
 
 test("admin profile changes update the name and password while revoking other sessions", async () => {
   const currentPassword = "current-password";
-  const db = createDb("admin", await bcrypt.hash(currentPassword, 4));
+  const db = createDb("super_admin", await bcrypt.hash(currentPassword, 4));
 
   await withAuthApp(db, async (patch) => {
     const response = await patch({
@@ -121,7 +121,7 @@ test("admin profile changes update the name and password while revoking other se
 });
 
 test("admin profile changes reject an incorrect current password", async () => {
-  const db = createDb("admin", await bcrypt.hash("correct-password", 4));
+  const db = createDb("super_admin", await bcrypt.hash("correct-password", 4));
 
   await withAuthApp(db, async (patch) => {
     const response = await patch({
@@ -139,7 +139,7 @@ test("admin profile changes reject an incorrect current password", async () => {
   assert.equal(db.updates.length, 0);
 });
 
-test("employees cannot use the administrator profile update endpoint", async () => {
+test("employees cannot use the Super User profile update endpoint", async () => {
   const db = createDb("employee", "unused");
 
   await withAuthApp(db, async (patch) => {
@@ -149,7 +149,23 @@ test("employees cannot use the administrator profile update endpoint", async () 
     });
 
     assert.equal(response.status, 403);
-    assert.equal((await response.json()).message, "Administrator access is required.");
+    assert.equal((await response.json()).message, "Super User access is required.");
+  });
+
+  assert.equal(db.updates.length, 0);
+});
+
+test("appointed admins cannot change account settings", async () => {
+  const db = createDb("admin", "unused");
+
+  await withAuthApp(db, async (patch) => {
+    const response = await patch({
+      displayName: "Updated Administrator",
+      currentPassword: "current-password",
+    });
+
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).message, "Super User access is required.");
   });
 
   assert.equal(db.updates.length, 0);

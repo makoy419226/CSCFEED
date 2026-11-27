@@ -22,11 +22,15 @@ If either saved local role password is rejected, `npm run dev:local` offers an i
 - Browse and filter reports by project, date, or search terms.
 - Add projects with a name, description, and color, then edit those details later.
 - Delete projects only when no reports reference them.
-- Administer the supplied manpower directory by Punch ID, employee name, designation, and active status.
+- Administer the supplied manpower directory by Punch ID, employee name, designation, active status, and admin access.
+- The Super User can appoint or remove admins. Appointed admins can view all reports, manage projects and manpower accounts, and archive reports; they cannot change admin access or the Super User account.
+- Admins can assign an active employee to manage one project. Project Managers can view, upload, download, edit, archive, and export reports only in their assigned project; they cannot manage accounts or projects.
+- The Super User can permanently delete selected reports with their evidence files and delete employee or appointed-admin accounts. A deleted user's reports and uploader attribution are retained.
 - Open each employee's dated report log from the manpower directory to review report details and attachments.
 - Add a report with a project, date, signed-in user, title, description, and multiple file attachments, with a confirmation before upload.
 - Preview attached images, PDFs, DOCX/CSV text, and XLSX/CSV tables in the browser; older DOC/XLS files can be downloaded.
 - Download a report package as a ZIP containing a PDF summary and all evidence attachments in an `evidence/` folder; individual attachments can also be downloaded separately.
+- Export a project ZIP containing a PDF summary and evidence files for every active report; Project Managers are restricted to their assigned project.
 - Store and stream uploaded files from server-local storage.
 - View project cards and report counts.
 
@@ -43,16 +47,16 @@ Express API
        └─ Optional email notifications when SMTP is configured
 ```
 
-The API is split into route, identity/authorization, validation, domain, storage, and notification modules under `server/`. All projects, manpower changes, and report metadata are persisted in PostgreSQL. Uploaded files are streamed to `UPLOAD_DIR` (default `storage/reports`, excluded from Git); each file is limited to 512 MiB by default and can be changed with `MAX_UPLOAD_BYTES`. Reports have no file-count or combined-size cap. Reports become available to administrators immediately after upload. Admins can archive active reports; archived reports cannot be downloaded or restored through the app.
+The API is split into route, identity/authorization, validation, domain, storage, and notification modules under `server/`. All projects, manpower changes, and report metadata are persisted in PostgreSQL. Uploaded files are streamed to `UPLOAD_DIR` (default `storage/reports`, excluded from Git); each file is limited to 512 MiB by default and can be changed with `MAX_UPLOAD_BYTES`. Reports have no file-count or combined-size cap. Reports become available to administrators immediately after upload. Appointed admins and the Super User can archive active reports; only the Super User can permanently delete selected reports and their evidence files. Deleting a manpower account revokes its sessions while keeping its reports and uploader snapshots.
 
 Email is disabled unless SMTP settings and `REPORT_NOTIFICATION_EMAILS` are provided. If an email fails after an upload commits, the report remains saved and the API returns a notification warning.
 Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and comma-separated `REPORT_NOTIFICATION_EMAILS` in `.env` to enable upload notifications.
 
 The employee/admin login screens use a local Express API backed by PostgreSQL and Drizzle ORM. Vite proxies `/api/*` to that API on `127.0.0.1:5001`; set `CSCFEED_API_URL` if it runs elsewhere. The API issues opaque, database-backed, HttpOnly session cookies and fails closed if the database or migrations are unavailable.
 
-Copy `.env.example` to `.env` and set `DATABASE_URL` to the least-privilege runtime connection. Set `MIGRATION_DATABASE_URL` to a schema-owner connection for migration commands. In development, the API creates the initial `admin` account with password `admin123` if it does not already exist. Set `BOOTSTRAP_ADMIN_PASSWORD` to override that initial password. This development default is weak and must never be used in production. Production requires `BOOTSTRAP_ADMIN_PASSWORD` with at least 12 characters and applies that configured password to the administrator at startup. The administrator uses reserved Punch ID `0000`.
+Copy `.env.example` to `.env` and set `DATABASE_URL` to the least-privilege runtime connection. Set `MIGRATION_DATABASE_URL` to a schema-owner connection for migration commands. In development, the API creates the initial Super User (`admin`, reserved Punch ID `0000`) with password `admin123` if it does not already exist. Set `BOOTSTRAP_ADMIN_PASSWORD` to override that initial password. This development default is weak and must never be used in production. Production requires `BOOTSTRAP_ADMIN_PASSWORD` with at least 12 characters and applies that configured password to the Super User at startup. Existing reserved admin accounts are upgraded to the protected Super User role at startup.
 
-Employee sign-in currently accepts Punch ID alone, as requested. A Punch ID is not proof of identity, so this login method is not suitable for sensitive production reports without an additional trusted verification step. Employees can submit reports and browse/download only their own active reports in a date-ordered log; administrators can browse all active reports. Project management and manpower changes require an administrator. Projects with reports cannot be deleted, and archiving requires an administrator.
+Employee sign-in currently accepts Punch ID alone, as requested. Appointed admins use that same Punch ID-only sign-in and can browse all active reports, download report packages, manage projects and manpower accounts, and archive reports. A Punch ID is not proof of identity, so this login method is not suitable for sensitive production reports without an additional trusted verification step; grant admin access only to trusted users. Only the Super User can appoint or remove admins, manage account settings, or change roles. The Super User account is protected from manpower edits and role changes. Employees can submit reports and browse/download only their own active reports in a date-ordered log. Projects with reports cannot be deleted.
 
 ## PostgreSQL data layer
 
@@ -60,7 +64,7 @@ Apply the schema and idempotent 54-person roster seed with `psql`:
 
 ```powershell
 $env:MIGRATION_DATABASE_URL = "postgres://..."
-psql "$env:MIGRATION_DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f .\database\migrations\001_core.sql
+psql "$env:MIGRATION_DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f .\database\migrations\001_core.sql -f .\database\migrations\002_admin_roles.sql -f .\database\migrations\003_account_and_report_deletion.sql -f .\database\migrations\004_project_managers.sql
 ```
 
 Apply the Drizzle-managed authentication tables after the core schema:
@@ -75,7 +79,7 @@ npm run dev
 
 Run the migration as a dedicated non-superuser database owner. The management functions are `SECURITY DEFINER`; do not make a superuser their owner.
 
-The migration creates account, project, report, and report-attachment tables; Punch IDs are stored as text so leading zeroes are preserved. It also defines account upsert/activation/role/external-identity functions, project create/update/list functions, report create/list/archive/file-metadata functions, and timestamp triggers. Client-facing functions run with the migration owner’s privileges and a fixed search path; direct table and function access is revoked from `PUBLIC`.
+The core migration creates account, project, report, and report-attachment tables; Punch IDs are stored as text so leading zeroes are preserved. The admin-role migration adds the protected Super User role, makes role assignment Super User-only, and protects that account from appointed-admin changes. The account/report deletion migration snapshots report uploader attribution and allows account references to be cleared while retaining report history. The Project Manager migration adds one active employee assignment per project and clears assignments when an account becomes inactive or an administrator. The local `npm run dev` startup applies these custom migrations in sequence after restart. The migrations also define account upsert/activation/role/external-identity functions, project create/update/list functions, report create/list/archive/file-metadata functions, and timestamp triggers. Client-facing functions run with the migration owner’s privileges and a fixed search path; direct table and function access is revoked from `PUBLIC`.
 
 After applying the migration, grant only the backend role access to the schema and functions. For example, run as a database administrator and replace the role name if needed:
 

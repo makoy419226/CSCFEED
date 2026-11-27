@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import { eq, sql } from "drizzle-orm";
 import { accounts, authCredentials } from "../src/db/schema.js";
+import { superUserRole } from "./identity.js";
 
 const reservedAdminPunchId = "0000";
 
@@ -25,8 +26,13 @@ export async function bootstrapApplication({ db }) {
     .limit(1);
 
   let accountId = credential?.accountId;
-  if (credential && credential.role !== "admin") {
+  if (credential && !["admin", superUserRole].includes(credential.role)) {
     throw new Error("The reserved admin username is assigned to a non-administrator account.");
+  }
+  if (credential && credential.role !== superUserRole) {
+    await db.update(accounts)
+      .set({ accountRole: superUserRole })
+      .where(eq(accounts.id, credential.accountId));
   }
   if (!credential) {
     const passwordHash = await bcrypt.hash(password, 12);
@@ -41,8 +47,13 @@ export async function bootstrapApplication({ db }) {
         .where(eq(authCredentials.username, "admin"))
         .limit(1);
       if (credentialAfterLock) {
-        if (credentialAfterLock.role !== "admin") {
+        if (!["admin", superUserRole].includes(credentialAfterLock.role)) {
           throw new Error("The reserved admin username is assigned to a non-administrator account.");
+        }
+        if (credentialAfterLock.role !== superUserRole) {
+          await tx.update(accounts)
+            .set({ accountRole: superUserRole })
+            .where(eq(accounts.id, credentialAfterLock.accountId));
         }
         return credentialAfterLock.accountId;
       }
@@ -51,15 +62,21 @@ export async function bootstrapApplication({ db }) {
         .where(eq(accounts.punchId, reservedAdminPunchId))
         .for("update");
       let account = existingAccount;
-      if (account && account.accountRole !== "admin") {
+      if (account && !["admin", superUserRole].includes(account.accountRole)) {
         throw new Error(`Punch ID ${reservedAdminPunchId} is reserved for the administrator account.`);
+      }
+      if (account && account.accountRole !== superUserRole) {
+        [account] = await tx.update(accounts)
+          .set({ accountRole: superUserRole })
+          .where(eq(accounts.id, account.id))
+          .returning();
       }
       if (!account) {
         [account] = await tx.insert(accounts).values({
           punchId: reservedAdminPunchId,
           fullName: "CSC Feed Administrator",
           designation: "System Administrator",
-          accountRole: "admin",
+          accountRole: superUserRole,
         }).returning();
       }
 

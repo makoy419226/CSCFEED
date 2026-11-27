@@ -3,8 +3,10 @@ import { z } from "zod";
 const projectColors = ["blue", "orange", "green", "purple"];
 const positiveId = z.coerce.number().int().positive();
 const punchId = z.string().trim().regex(/^\d{3,10}$/, "Punch ID must contain 3 to 10 digits.");
+const employeePunchId = punchId.refine((value) => value !== "0000", "Punch ID 0000 is reserved for the Super User.");
 
 export const idParamsSchema = z.object({ id: positiveId });
+export const projectIdParamsSchema = z.object({ projectId: positiveId });
 export const reportFileParamsSchema = z.object({ id: positiveId, fileId: positiveId });
 export const punchIdParamsSchema = z.object({ punchId });
 
@@ -37,14 +39,22 @@ export const projectSchema = z.object({
 });
 
 export const manpowerSchema = z.object({
-  punchId,
+  punchId: employeePunchId,
   name: z.string().trim().min(2).max(160),
   designation: z.string().trim().min(1).max(120),
 });
 
+export const manpowerAdminAccessSchema = z.object({
+  adminAccess: z.boolean(),
+}).strict();
+
 export const manpowerActiveSchema = z.object({
   active: z.boolean(),
 });
+
+export const projectManagerAssignmentSchema = z.object({
+  projectId: positiveId.nullable(),
+}).strict();
 
 export const reportQuerySchema = z.object({
   projectId: positiveId.optional(),
@@ -55,6 +65,20 @@ export const reportQuerySchema = z.object({
   (query) => !query.fromDate || !query.toDate || query.fromDate <= query.toDate,
   { message: "Start date must be on or before end date." },
 );
+
+export const reportBulkDeleteSchema = z.object({
+  ids: z.array(positiveId).min(1).max(100)
+    .refine((ids) => new Set(ids).size === ids.length, "Report IDs must be unique."),
+}).strict();
+
+export const reportEditSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+  description: z.string().trim().max(2000).default(""),
+  reportDate: z.iso.date(),
+  removeFileIds: z.array(positiveId).max(100)
+    .refine((ids) => new Set(ids).size === ids.length, "Attachment IDs must be unique."),
+  removeLegacyFile: z.boolean().default(false),
+}).strict();
 
 export const reportFormSchema = z.object({
   projectId: positiveId,
