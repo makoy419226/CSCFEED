@@ -289,9 +289,19 @@ tbody tr:hover:not(:has(.empty-state)) { background: #fbfcfe; }
 .manpower-search { width: min(460px, 100%); }
 .manpower-table { min-width: 1180px; }
 .manpower-table td { height: 52px; }
+.manpower-table .report-actions > * { flex: 0 0 auto; }
 .manpower-transfer-button { min-height: 29px; gap: 4px; padding: 0 7px; font-size: 9px; white-space: nowrap; }
 .project-manager-badge { display: inline-block; overflow: hidden; max-width: 190px; padding: 4px 8px; border: 1px solid var(--brand-blue-border); border-radius: 5px; color: var(--brand-action); background: var(--brand-blue-soft); font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.project-manager-assignment-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .project-manager-assign-button { min-height: 28px; padding: 0 7px; border: 1px solid var(--brand-blue-border); border-radius: 5px; background: var(--brand-blue-soft); font-size: 10px; }
+.manager-project-selection { display: grid; gap: 8px; margin: 0; padding: 12px; border: 1px solid #e1e6ed; border-radius: 7px; }
+.manager-project-selection legend { padding: 0 4px; color: #536176; font-size: 11px; font-weight: 600; }
+.manager-project-selection > p { margin: 0; color: #78869a; font-size: 10px; line-height: 1.45; }
+.manager-project-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; max-height: 190px; overflow-y: auto; }
+.manager-project-option { display: flex; min-height: 34px; align-items: center; gap: 7px; padding: 6px 8px; border: 1px solid #e7ebf0; border-radius: 5px; color: #536176; font-size: 10px; }
+.manager-project-option input { width: 14px; height: 14px; margin: 0; accent-color: var(--brand-action); }
+.manager-project-option small { margin-left: auto; color: #8793a4; font-size: 9px; }
+.manager-project-option-disabled { background: #f7f8fa; color: #8793a4; }
 .project-manager-none { color: #a3adbb; font-size: 11px; }
 .field-hint { display: block; margin-top: 5px; color: #8793a5; font-size: 10px; font-weight: 400; }
 .employee-report-log-modal { width: min(100%, 840px); }
@@ -312,13 +322,6 @@ tbody tr:hover:not(:has(.empty-state)) { background: #fbfcfe; }
 .admin-rights-note { display: flex; align-items: flex-start; gap: 10px; margin: -7px 0 18px; padding: 12px 14px; border: 1px solid var(--brand-blue-border); border-left: 3px solid var(--brand-yellow); border-radius: 8px; color: #667388; background: var(--brand-blue-soft); font-size: 11px; line-height: 1.55; }
 .admin-rights-note > svg { flex: 0 0 auto; margin-top: 1px; color: var(--brand-action); }
 .admin-rights-note strong { color: #354258; font-weight: 650; }
-.admin-access-control { display: inline-flex; min-height: 30px; align-items: center; gap: 7px; padding: 0; border: 0; color: #667388; background: transparent; font-size: 10px; font-weight: 600; }
-.admin-access-track { display: inline-flex; width: 30px; height: 17px; align-items: center; padding: 2px; border: 1px solid #cbd5df; border-radius: 10px; background: #edf0f4; transition: background .15s, border-color .15s; }
-.admin-access-track > span { width: 11px; height: 11px; border-radius: 50%; background: white; box-shadow: 0 1px 2px #17263830; transition: transform .15s; }
-.admin-access-control.admin-access-enabled { color: var(--brand-action); }
-.admin-access-control.admin-access-enabled .admin-access-track { border-color: var(--brand-action); background: var(--brand-action); }
-.admin-access-control.admin-access-enabled .admin-access-track > span { transform: translateX(12px); }
-.admin-access-control:disabled { cursor: not-allowed; opacity: .7; }
 .projects-help { display: flex; align-items: center; gap: 9px; margin-top: 18px; padding: 13px 15px; border: 1px solid var(--brand-blue-border); border-radius: 8px; color: #75849a; background: var(--brand-blue-soft); font-size: 11px; }
 .projects-help svg { flex: 0 0 auto; color: var(--brand-action); }
 .toast { position: fixed; z-index: 40; right: 24px; bottom: 24px; display: flex; max-width: min(460px, calc(100vw - 32px)); align-items: center; gap: 10px; padding: 13px 14px; border: 1px solid #dcebe3; border-radius: 8px; color: #4c685b; background: #fff; box-shadow: 0 10px 30px #1a2c401c; font-size: 12px; }

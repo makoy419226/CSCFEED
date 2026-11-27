@@ -183,8 +183,8 @@ async function listReports(db, identity, query, maxUploadBytes, ownerId = null) 
   const filters = [isNull(reports.archivedAt), eq(projects.active, true)];
   if (ownerId !== null) filters.push(eq(reports.uploadedBy, ownerId));
   else if (!hasAdminAccess(identity.role)) {
-    filters.push(identity.projectManagerProjectId
-      ? eq(reports.projectId, Number(identity.projectManagerProjectId))
+    filters.push(identity.projectManagerProjectIds?.length
+      ? inArray(reports.projectId, identity.projectManagerProjectIds.map(Number))
       : eq(reports.uploadedBy, identity.id));
   }
   if (projectId) filters.push(eq(reports.projectId, projectId));
@@ -247,7 +247,7 @@ async function listReports(db, identity, query, maxUploadBytes, ownerId = null) 
 function reportOwnerFilters(identity) {
   if (hasAdminAccess(identity.role)) return [];
   if (hasProjectManagerAccess(identity)) {
-    return [eq(reports.projectId, Number(identity.projectManagerProjectId))];
+    return [inArray(reports.projectId, identity.projectManagerProjectIds.map(Number))];
   }
   return [eq(reports.uploadedBy, identity.id)];
 }
@@ -322,7 +322,7 @@ export function createReportsRouter({ db, maxUploadBytes }) {
       .from(accounts)
       .where(and(
         eq(accounts.punchId, req.validated.params.punchId),
-        inArray(accounts.accountRole, ["employee", "admin"]),
+        inArray(accounts.accountRole, ["employee", "admin", "project_manager"]),
       ))
       .limit(1);
     if (!account) throw new HttpError(404, "Employee account not found.");
@@ -339,7 +339,7 @@ export function createReportsRouter({ db, maxUploadBytes }) {
   router.get("/project/:projectId/export", requireProjectReportManager, validate(projectIdParamsSchema, "params"), asyncRoute(async (req, res, next) => {
     const projectId = req.validated.params.projectId;
     if (!canManageProjectReports(req.identity, projectId)) {
-      throw new HttpError(403, "You can only export reports from your assigned project.");
+      throw new HttpError(403, "You can only export reports from your assigned projects.");
     }
 
     const reportRows = await db.select({
@@ -526,9 +526,9 @@ export function createReportsRouter({ db, maxUploadBytes }) {
           throw new HttpError(404, "Choose an active project.");
         }
         if (!hasAdminAccess(req.identity.role)
-          && req.identity.projectManagerProjectId
-          && Number(project.id) !== Number(req.identity.projectManagerProjectId)) {
-          throw new HttpError(403, "You can only upload reports to your assigned project.");
+          && req.identity.projectManagerProjectIds?.length
+          && !req.identity.projectManagerProjectIds.includes(String(project.id))) {
+          throw new HttpError(403, "You can only upload reports to your assigned projects.");
         }
 
         const firstFile = files[0];
@@ -664,7 +664,7 @@ export function createReportsRouter({ db, maxUploadBytes }) {
           throw new HttpError(409, "Archived or inactive-project reports cannot be edited.");
         }
         if (!canManageProjectReports(req.identity, current.projectId)) {
-          throw new HttpError(403, "You can only edit reports in your assigned project.");
+          throw new HttpError(403, "You can only edit reports in your assigned projects.");
         }
 
         let currentFiles = await tx.select({

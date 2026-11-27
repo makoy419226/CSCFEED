@@ -10,12 +10,21 @@ export function hasAdminAccess(role) {
 }
 
 export function hasProjectManagerAccess(identity) {
-  return Boolean(identity?.projectManagerProjectId);
+  return Boolean(identity?.projectManagerProjectIds?.length);
 }
 
 export function canManageProjectReports(identity, projectId) {
   return hasAdminAccess(identity?.role)
-    || (hasProjectManagerAccess(identity) && Number(identity.projectManagerProjectId) === Number(projectId));
+    || (hasProjectManagerAccess(identity)
+      && identity.projectManagerProjectIds.includes(String(projectId)));
+}
+
+export async function listProjectManagerProjectIds(db, accountId) {
+  const rows = await db.select({ id: projects.id })
+    .from(projects)
+    .where(eq(projects.managerId, accountId))
+    .orderBy(projects.id);
+  return rows.map(({ id }) => String(id));
 }
 
 export function readSessionToken(req) {
@@ -50,12 +59,10 @@ export async function resolveIdentity(db, token) {
       role: accounts.accountRole,
       punchId: accounts.punchId,
       username: authCredentials.username,
-      projectManagerProjectId: projects.id,
     })
     .from(authSessions)
     .innerJoin(accounts, eq(accounts.id, authSessions.accountId))
     .leftJoin(authCredentials, eq(authCredentials.accountId, accounts.id))
-    .leftJoin(projects, eq(projects.managerId, accounts.id))
     .where(and(
       eq(authSessions.tokenHash, createTokenHash(token)),
       gt(authSessions.expiresAt, new Date()),
@@ -70,7 +77,9 @@ export async function resolveIdentity(db, token) {
       role: record.role,
       username: record.username || record.punchId,
       punchId: record.punchId,
-      projectManagerProjectId: record.projectManagerProjectId ? String(record.projectManagerProjectId) : null,
+      projectManagerProjectIds: record.role === "project_manager"
+        ? await listProjectManagerProjectIds(db, record.id)
+        : [],
     }
     : null;
 }

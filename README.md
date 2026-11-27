@@ -8,7 +8,11 @@ A responsive frontend skeleton for sharing reports across multiple projects. The
 npm install
 ```
 
-**Quick start (any PC, including a new one):** run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-local.ps1`. If PostgreSQL is not installed it runs the first-time setup below, then `npm run start:local` ([scripts/start-local.js](scripts/start-local.js)) prepares the database and migrations, creates or checks the Super User (failing early with the real error), starts the API and web app, waits until the API reports ready, and prints the sign-in details.
+**Quick start on Windows:** run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-local.ps1`. If PostgreSQL is not installed it runs the first-time setup below.
+
+**Quick start on macOS:** install Node.js/npm and PostgreSQL, make sure PostgreSQL is running, then run `./scripts/start-local.sh` (or `sh scripts/start-local.sh`). No PowerShell installation is needed.
+
+Both launchers run `npm run start:local` ([scripts/start-local.js](scripts/start-local.js)), which prepares the database and migrations, creates or checks the Super User (failing early with the real error), starts the API and web app, waits until the API reports ready, and prints the sign-in details. The macOS launcher does not install PostgreSQL; on first run, the startup flow will ask for the PostgreSQL administrator password in the terminal.
 
 On a new Windows PC, run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-local.ps1` (or `npm run setup` once Node.js is installed). It installs Node.js LTS and PostgreSQL 17 on port 5432 with winget if they are missing (asking for a new `postgres` superuser password and elevating only for the install), sets the PostgreSQL service to start automatically, adds `psql` to your user PATH, runs `npm install`, and then launches the app as described below. Pass `-SetupOnly` to stop before launching.
 
@@ -28,16 +32,16 @@ If either saved local role password is rejected, `npm run dev:local` offers an i
 - Browse and filter reports by project, date, or search terms.
 - Add projects with a name, description, and color, then edit those details later.
 - Delete projects only when no reports reference them.
-- Administer the supplied manpower directory by Punch ID, employee name, designation, active status, and admin access.
-- The Super User can assign or transfer manpower accounts between projects from the Manpower directory. The project-membership migration assigns existing accounts to DS415 except reserved Punch ID 5755; newly added accounts start unassigned.
-- The Super User can appoint or remove admins. Appointed admins can view all reports, manage projects and manpower accounts, and archive reports; they cannot change admin access or the Super User account.
-- Admins can assign an active employee to manage one project. Project Managers can view, upload, download, edit, archive, and export reports only in their assigned project; they cannot manage accounts or projects.
+- Administer the supplied manpower directory by Punch ID, employee name, designation, role, and active status.
+- The Super User can edit or transfer an employee's assigned project from the Manpower directory. Project Manager assignments can be edited together, allowing a manager to manage multiple projects. The project-membership migration assigns existing accounts to DS415 except reserved Punch ID 5755; newly added accounts start unassigned.
+- Admin access remains separate from Project Manager appointments. Appointed admins can view all reports, manage projects and manpower accounts, and archive reports; they cannot change roles or the Super User account.
+- The Super User can appoint active employees as Project Managers and assign them to multiple projects (one manager per project). Project Managers can view, upload, download, edit, archive, and export reports only in their assigned projects; they cannot manage accounts or projects.
 - The Super User can permanently delete selected reports with their evidence files and delete employee or appointed-admin accounts. A deleted user's reports and uploader attribution are retained.
 - Open each employee's dated report log from the manpower directory to review report details and attachments.
 - Add a report with a project, date, signed-in user, title, description, and multiple file attachments, with a confirmation before upload.
 - Preview attached images, PDFs, DOCX/CSV text, and XLSX/CSV tables in the browser; older DOC/XLS files can be downloaded.
 - Download a report package as a ZIP containing a PDF summary and all evidence attachments in an `evidence/` folder; individual attachments can also be downloaded separately.
-- Export a project ZIP containing a PDF summary and evidence files for every active report; Project Managers are restricted to their assigned project.
+- Export a project ZIP containing a PDF summary and evidence files for every active report; Project Managers are restricted to their assigned projects.
 - Store and stream uploaded files from server-local storage.
 - View project cards and report counts.
 
@@ -63,7 +67,7 @@ The employee/admin login screens use a local Express API backed by PostgreSQL an
 
 Copy `.env.example` to `.env` and set `DATABASE_URL` to the least-privilege runtime connection. Set `MIGRATION_DATABASE_URL` to a schema-owner connection for migration commands. In development, the API creates the initial Super User (`admin`, reserved Punch ID `0000`) with password `admin123` if it does not already exist. Set `BOOTSTRAP_ADMIN_PASSWORD` to override that initial password. This development default is weak and must never be used in production. Production requires `BOOTSTRAP_ADMIN_PASSWORD` with at least 12 characters and applies that configured password to the Super User at startup. Existing reserved admin accounts are upgraded to the protected Super User role at startup.
 
-Employee sign-in currently accepts Punch ID alone, as requested. Appointed admins use that same Punch ID-only sign-in and can browse all active reports, download report packages, manage projects and manpower accounts, and archive reports. A Punch ID is not proof of identity, so this login method is not suitable for sensitive production reports without an additional trusted verification step; grant admin access only to trusted users. Only the Super User can appoint or remove admins, manage account settings, or change roles. The Super User account is protected from manpower edits and role changes. Employees can submit reports and browse/download only their own active reports in a date-ordered log. Projects with reports cannot be deleted.
+Employee and Project Manager sign-in currently accepts Punch ID alone, as requested. Appointed admins use that same Punch ID-only sign-in and can browse all active reports, download report packages, manage projects and manpower accounts, and archive reports. A Punch ID is not proof of identity, so this login method is not suitable for sensitive production reports without an additional trusted verification step; admin access should be limited to trusted users. Only the Super User can appoint Project Managers, manage account settings, or change roles. The Super User account is protected from manpower edits and role changes. Employees can submit reports and browse/download only their own active reports in a date-ordered log. Projects with reports cannot be deleted.
 
 ## PostgreSQL data layer
 
@@ -86,7 +90,7 @@ npm run dev
 
 Run the migration as a dedicated non-superuser database owner. The management functions are `SECURITY DEFINER`; do not make a superuser their owner.
 
-The core migration creates account, project, report, and report-attachment tables; Punch IDs are stored as text so leading zeroes are preserved. The admin-role migration adds the protected Super User role, makes role assignment Super User-only, and protects that account from appointed-admin changes. The account/report deletion migration snapshots report uploader attribution and allows account references to be cleared while retaining report history. The Project Manager migration adds one active employee assignment per project and clears assignments when an account becomes inactive or an administrator. The local `npm run dev` startup applies these custom migrations in sequence after restart. The migrations also define account upsert/activation/role/external-identity functions, project create/update/list functions, report create/list/archive/file-metadata functions, and timestamp triggers. Client-facing functions run with the migration owner’s privileges and a fixed search path; direct table and function access is revoked from `PUBLIC`.
+The core migration creates account, project, report, and report-attachment tables; Punch IDs are stored as text so leading zeroes are preserved. The admin-role migration adds the protected Super User role, makes role assignment Super User-only, and protects that account from appointed-admin changes. The account/report deletion migration snapshots report uploader attribution and allows account references to be cleared while retaining report history. The Project Manager migrations add Super User appointments, allow a Project Manager to manage multiple projects, and clear assignments when a manager becomes inactive or loses the appointment. Existing assigned employees are migrated to Project Manager accounts. The local `npm run dev` startup applies these custom migrations in sequence after restart. The migrations also define account upsert/activation/role/external-identity functions, project create/update/list functions, report create/list/archive/file-metadata functions, and timestamp triggers. Client-facing functions run with the migration owner’s privileges and a fixed search path; direct table and function access is revoked from `PUBLIC`.
 
 After applying the migration, grant only the backend role access to the schema and functions. For example, run as a database administrator and replace the role name if needed:
 

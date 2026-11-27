@@ -42,7 +42,6 @@ export const projects = cscfeed.table("projects", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("projects_name_ci_unique").on(sql`lower(${table.name})`),
-  uniqueIndex("projects_manager_id_unique").on(table.managerId).where(sql`${table.managerId} IS NOT NULL`),
 ]);
 
 export const reports = cscfeed.table("reports", {

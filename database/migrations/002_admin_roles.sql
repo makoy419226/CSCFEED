@@ -3,7 +3,7 @@ ALTER TABLE cscfeed.accounts
 
 ALTER TABLE cscfeed.accounts
   ADD CONSTRAINT accounts_account_role_check
-  CHECK (account_role IN ('employee', 'admin', 'super_admin'));
+  CHECK (account_role IN ('employee', 'admin', 'project_manager', 'super_admin'));
 
 CREATE OR REPLACE FUNCTION cscfeed.require_admin()
 RETURNS bigint
@@ -195,8 +195,8 @@ DECLARE
 BEGIN
   PERFORM cscfeed.require_super_user();
 
-  IF p_account_role IS NULL OR p_account_role NOT IN ('admin', 'employee') THEN
-    RAISE EXCEPTION 'Account role must be admin or employee'
+  IF p_account_role IS NULL OR p_account_role NOT IN ('admin', 'employee', 'project_manager') THEN
+    RAISE EXCEPTION 'Account role must be admin, employee, or project_manager'
       USING ERRCODE = '22023';
   END IF;
 

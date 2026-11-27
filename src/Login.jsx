@@ -78,7 +78,7 @@ export default function Login({ onLogin, serviceMessage = "" }) {
         name: account.name || account.username,
         role,
         punchId: account.punchId || account.username || employeeId,
-        projectManagerProjectId: account.projectManagerProjectId || null,
+        projectManagerProjectIds: account.projectManagerProjectIds || [],
       });
     } catch (requestError) {
       setError(requestError instanceof Error

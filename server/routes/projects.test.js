@@ -132,10 +132,10 @@ async function patchManager(db, body, id = "5") {
 }
 
 const managedProject = { id: 5, name: "Project A", description: "", color: "blue", managerId: null };
-const activeEmployee = { id: 7, punchId: "2468", fullName: "Jane Employee", accountRole: "employee", active: true };
+const activeProjectManager = { id: 7, punchId: "2468", fullName: "Jane Employee", accountRole: "project_manager", active: true };
 
-test("an administrator appoints an employee as manager of a selected project", async () => {
-  const db = createManagerDb({ project: managedProject, manager: activeEmployee });
+test("the Super User assigns an appointed Project Manager to a selected project", async () => {
+  const db = createManagerDb({ project: managedProject, manager: activeProjectManager });
   const response = await patchManager(db, { punchId: "2468" });
   const body = await response.json();
 
@@ -143,25 +143,21 @@ test("an administrator appoints an employee as manager of a selected project", a
   assert.equal(body.data.id, "5");
   assert.equal(body.data.managerPunchId, "2468");
   assert.equal(body.data.managerName, "Jane Employee");
-  assert.equal(body.data.previousProjectId, null);
   assert.deepEqual(db.updates, [{ table: projects, values: { managerId: 7 } }]);
 });
 
-test("appointing replaces the current manager and moves the employee off their previous project", async () => {
+test("a Project Manager can be assigned to an additional project", async () => {
   const db = createManagerDb({
-    project: { ...managedProject, managerId: 11 },
-    manager: activeEmployee,
+    project: managedProject,
+    manager: activeProjectManager,
     previous: { id: 9 },
   });
   const response = await patchManager(db, { punchId: "2468" });
   const body = await response.json();
 
   assert.equal(response.status, 200);
-  assert.equal(body.data.previousProjectId, "9");
-  assert.deepEqual(db.updates, [
-    { table: projects, values: { managerId: null } },
-    { table: projects, values: { managerId: 7 } },
-  ]);
+  assert.equal(body.data.managerPunchId, "2468");
+  assert.deepEqual(db.updates, [{ table: projects, values: { managerId: 7 } }]);
 });
 
 test("clearing the manager removes the assignment", async () => {
@@ -173,19 +169,23 @@ test("clearing the manager removes the assignment", async () => {
   assert.deepEqual(db.updates, [{ table: projects, values: { managerId: null } }]);
 });
 
-test("inactive or admin accounts cannot be appointed", async () => {
-  for (const manager of [{ ...activeEmployee, active: false }, { ...activeEmployee, accountRole: "admin" }]) {
+test("inactive or non-Project-Manager accounts cannot be assigned", async () => {
+  for (const manager of [
+    { ...activeProjectManager, active: false },
+    { ...activeProjectManager, accountRole: "employee" },
+    { ...activeProjectManager, accountRole: "admin" },
+  ]) {
     const db = createManagerDb({ project: managedProject, manager });
     const response = await patchManager(db, { punchId: "2468" });
 
     assert.equal(response.status, 409);
-    assert.equal((await response.json()).message, "Only active employee accounts can be project managers.");
+    assert.equal((await response.json()).message, "Only active appointed Project Managers can manage a project.");
     assert.equal(db.updates.length, 0);
   }
 });
 
 test("appointed admins cannot appoint a Project Manager", async () => {
-  const db = createManagerDb({ project: managedProject, manager: activeEmployee, role: "admin" });
+  const db = createManagerDb({ project: managedProject, manager: activeProjectManager, role: "admin" });
   const response = await patchManager(db, { punchId: "2468" });
 
   assert.equal(response.status, 403);
@@ -194,7 +194,7 @@ test("appointed admins cannot appoint a Project Manager", async () => {
 });
 
 test("appointing a new manager leaves exactly one manager on the project", async () => {
-  const db = createManagerDb({ project: { ...managedProject, managerId: 11 }, manager: activeEmployee });
+  const db = createManagerDb({ project: { ...managedProject, managerId: 11 }, manager: activeProjectManager });
   const response = await patchManager(db, { punchId: "2468" });
 
   assert.equal(response.status, 200);

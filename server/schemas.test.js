@@ -5,6 +5,7 @@ import {
   manpowerAdminAccessSchema,
   manpowerSchema,
   projectManagerAssignmentSchema,
+  projectManagerAssignmentsSchema,
   projectMembershipSchema,
   reportBulkDeleteSchema,
   reportEditSchema,
@@ -38,6 +39,12 @@ test("Project Manager assignments accept one positive project id or an explicit 
   assert.equal(projectManagerAssignmentSchema.safeParse({ projectId: "4" }).success, true);
   assert.equal(projectManagerAssignmentSchema.safeParse({ projectId: null }).success, true);
   assert.equal(projectManagerAssignmentSchema.safeParse({ projectId: 0 }).success, false);
+});
+
+test("Project Manager assignment lists accept unique project ids and allow clearing all assignments", () => {
+  assert.equal(projectManagerAssignmentsSchema.safeParse({ projectIds: ["4", "5"] }).success, true);
+  assert.equal(projectManagerAssignmentsSchema.safeParse({ projectIds: [] }).success, true);
+  assert.equal(projectManagerAssignmentsSchema.safeParse({ projectIds: [4, 4] }).success, false);
 });
 
 test("employee project transfers accept one positive project id or an explicit unassignment", () => {

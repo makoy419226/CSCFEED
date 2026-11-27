@@ -17,6 +17,7 @@ function createDb(account) {
         leftJoin() { return this; },
         where() { return this; },
         async limit() { return [account]; },
+        async orderBy() { return account.projectManagerProjects || []; },
       };
     },
     delete() {
@@ -86,6 +87,24 @@ test("appointed admins cannot use Super User username/password sign-in", async (
 
   assert.equal(response.status, 401);
   assert.equal(db.insertedSessions.length, 0);
+});
+
+test("appointed Project Managers sign in and receive all assigned project ids", async () => {
+  const db = createDb({
+    id: 15,
+    fullName: "Project Manager",
+    role: "project_manager",
+    punchId: "4567",
+    active: true,
+    projectManagerProjects: [{ id: 5 }, { id: 8 }],
+  });
+
+  const response = await withLoginApp(db, { employeeId: "4567" });
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.user.role, "project_manager");
+  assert.deepEqual(body.user.projectManagerProjectIds, ["5", "8"]);
 });
 
 test("the Super User can continue using username/password sign-in", async () => {

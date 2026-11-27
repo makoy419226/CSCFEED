@@ -8,10 +8,6 @@ ALTER TABLE cscfeed.projects
   ADD CONSTRAINT projects_manager_id_fkey
   FOREIGN KEY (manager_id) REFERENCES cscfeed.accounts(id) ON DELETE SET NULL;
 
-CREATE UNIQUE INDEX IF NOT EXISTS projects_manager_id_unique
-  ON cscfeed.projects (manager_id)
-  WHERE manager_id IS NOT NULL;
-
 CREATE OR REPLACE FUNCTION cscfeed.validate_project_manager()
 RETURNS trigger
 LANGUAGE plpgsql

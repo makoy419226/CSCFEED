@@ -1,5 +1,5 @@
 import express from "express";
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { accounts, projects, reports } from "../../src/db/schema.js";
 import { asyncRoute, HttpError } from "../errors.js";
 import { hasAdminAccess, requireAdmin, requireIdentity, requireSuperUser, superUserRole } from "../identity.js";
@@ -26,8 +26,8 @@ export function createProjectsRouter({ db, ready }) {
   router.get("/", asyncRoute(async (req, res) => {
     if (!ready()) throw new HttpError(503, "Project data is not available until the database is ready.");
     const filters = [eq(projects.active, true)];
-    if (!hasAdminAccess(req.identity.role) && req.identity.projectManagerProjectId) {
-      filters.push(eq(projects.id, Number(req.identity.projectManagerProjectId)));
+    if (!hasAdminAccess(req.identity.role) && req.identity.projectManagerProjectIds?.length) {
+      filters.push(inArray(projects.id, req.identity.projectManagerProjectIds.map(Number)));
     }
     const [rows, reportCounts] = await Promise.all([
       db.select({
@@ -106,17 +106,8 @@ export function createProjectsRouter({ db, ready }) {
         if (!manager || manager.punchId === "0000" || manager.accountRole === superUserRole) {
           throw new HttpError(404, "Employee account not found.");
         }
-        if (!manager.active || manager.accountRole !== "employee") {
-          throw new HttpError(409, "Only active employee accounts can be project managers.");
-        }
-
-        // A person manages at most one project: move them off any previous one.
-        const [previous] = await tx.select({ id: projects.id })
-          .from(projects)
-          .where(and(eq(projects.managerId, manager.id), ne(projects.id, project.id)))
-          .for("update");
-        if (previous) {
-          await tx.update(projects).set({ managerId: null }).where(eq(projects.id, previous.id));
+        if (!manager.active || manager.accountRole !== "project_manager") {
+          throw new HttpError(409, "Only active appointed Project Managers can manage a project.");
         }
         if (Number(project.managerId) !== Number(manager.id)) {
           await tx.update(projects).set({ managerId: manager.id }).where(eq(projects.id, project.id));
@@ -124,17 +115,16 @@ export function createProjectsRouter({ db, ready }) {
 
         return {
           project: { ...project, managerName: manager.fullName, managerPunchId: manager.punchId },
-          previousProjectId: previous ? String(previous.id) : null,
         };
       });
 
       return res.json({
         success: true,
-        data: { ...toProject(result.project), previousProjectId: result.previousProjectId },
+        data: toProject(result.project),
       });
     } catch (error) {
       if (error?.code === "23505" || error?.cause?.code === "23505") {
-        throw new HttpError(409, "This employee is already assigned to manage another project.");
+        throw new HttpError(409, "This project already has an assigned manager.");
       }
       throw error;
     }

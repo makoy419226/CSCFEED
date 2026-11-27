@@ -7,7 +7,9 @@ import { createReportsRouter } from "./reports.js";
 function readSqlParts(sql) {
   const parts = [];
   for (const chunk of sql?.queryChunks || []) {
-    if (chunk?.queryChunks) {
+    if (Array.isArray(chunk)) {
+      parts.push(...readSqlParts({ queryChunks: chunk }));
+    } else if (chunk?.queryChunks) {
       parts.push(...readSqlParts(chunk));
     } else if (chunk?.encoder && Object.prototype.hasOwnProperty.call(chunk, "value")) {
       parts.push({ type: "parameter", value: chunk.value });
@@ -18,9 +20,11 @@ function readSqlParts(sql) {
   return parts;
 }
 
-function createDb(role, reportRows = [], accountRows = [], projectManagerProjectId = null) {
+function createDb(role, reportRows = [], accountRows = [], projectManagerProjectIds = []) {
   let selectCalls = 0;
   const whereConditions = [];
+  const ids = Array.isArray(projectManagerProjectIds) ? projectManagerProjectIds : [projectManagerProjectIds];
+  const reportSelectCall = role === "project_manager" ? 3 : 2;
   const db = {
     get selectCalls() { return selectCalls; },
     whereConditions,
@@ -42,13 +46,16 @@ function createDb(role, reportRows = [], accountRows = [], projectManagerProject
               role,
               punchId: role === "super_admin" ? "0000" : "1234",
               username: role,
-              projectManagerProjectId,
+              projectManagerProjectIds: ids.map(String),
             }];
           }
           return selectCall === 2 ? accountRows : [];
         },
         async orderBy() {
-          return selectCall === 2 || (selectCall === 3 && accountRows.length > 0) ? reportRows : [];
+          if (role === "project_manager" && selectCall === 2) return ids.map((id) => ({ id }));
+          if (accountRows.length > 0 && selectCall === 3) return reportRows;
+          if (selectCall === reportSelectCall) return reportRows;
+          return [];
         },
       };
     },
@@ -162,10 +169,10 @@ test("the Super User can list all reports", async () => {
   });
 });
 
-test("Project Managers only list reports from their assigned project", async () => {
-  const db = createDb("employee", [{
+test("Project Managers only list reports from their assigned projects", async () => {
+  const db = createDb("project_manager", [{
     id: 17,
-    projectId: 3,
+    projectId: 4,
     projectName: "Project A",
     title: "Daily progress",
     description: "Site update",
@@ -173,7 +180,7 @@ test("Project Managers only list reports from their assigned project", async () 
     reportDate: "2026-11-25",
     fileName: "progress.pdf",
     fileSizeBytes: 123,
-  }], [], 3);
+  }], [], [3, 4]);
 
   await withReportsApp(db, async (get) => {
     const response = await get("/managed");
@@ -181,10 +188,11 @@ test("Project Managers only list reports from their assigned project", async () 
 
     assert.equal(response.status, 200);
     assert.equal(body.data.length, 1);
-    const projectScope = db.whereConditions.find(({ selectCall }) => selectCall === 2);
+    const projectScope = db.whereConditions.find(({ selectCall }) => selectCall === 3);
     const sqlParts = readSqlParts(projectScope.condition);
     assert.ok(sqlParts.some((part) => part.type === "column" && part.value === "project_id"));
     assert.ok(sqlParts.some((part) => part.type === "parameter" && part.value === 3));
+    assert.ok(sqlParts.some((part) => part.type === "parameter" && part.value === 4));
   });
 });
 
@@ -201,24 +209,24 @@ test("employees without a Project Manager assignment cannot use the managed repo
 });
 
 test("Project Managers cannot download or export reports from another project", async () => {
-  const fileDb = createDb("employee", [], [], 3);
+  const fileDb = createDb("project_manager", [], [], [3, 4]);
   await withReportsApp(fileDb, async (get) => {
     const response = await get("/17/file");
 
     assert.equal(response.status, 404);
-    const fileScope = fileDb.whereConditions.find(({ selectCall }) => selectCall === 2);
+    const fileScope = fileDb.whereConditions.find(({ selectCall }) => selectCall === 3);
     const sqlParts = readSqlParts(fileScope.condition);
     assert.ok(sqlParts.some((part) => part.type === "column" && part.value === "project_id"));
     assert.ok(sqlParts.some((part) => part.type === "parameter" && part.value === 3));
   });
 
-  const exportDb = createDb("employee", [], [], 3);
+  const exportDb = createDb("project_manager", [], [], [3, 4]);
   await withReportsApp(exportDb, async (get) => {
-    const response = await get("/project/4/export");
+    const response = await get("/project/7/export");
 
     assert.equal(response.status, 403);
-    assert.equal((await response.json()).message, "You can only export reports from your assigned project.");
-    assert.equal(exportDb.selectCalls, 1);
+    assert.equal((await response.json()).message, "You can only export reports from your assigned projects.");
+    assert.equal(exportDb.selectCalls, 2);
   });
 });
 

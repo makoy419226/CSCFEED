@@ -14,10 +14,11 @@ test("employees cannot archive reports", () => {
 });
 
 test("a Project Manager can archive reports only in their assigned project", () => {
-  const identity = { role: "employee", projectManagerProjectId: "12" };
+  const identity = { role: "project_manager", projectManagerProjectIds: ["12", "13"] };
   assert.doesNotThrow(() => assertReportTransition("active", "archived", identity, 12));
+  assert.doesNotThrow(() => assertReportTransition("active", "archived", identity, 13));
   assert.throws(
-    () => assertReportTransition("active", "archived", identity, 13),
+    () => assertReportTransition("active", "archived", identity, 14),
     (error) => error.status === 403,
   );
 });

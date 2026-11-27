@@ -48,6 +48,10 @@ export const manpowerAdminAccessSchema = z.object({
   adminAccess: z.boolean(),
 }).strict();
 
+export const manpowerProjectManagerAccessSchema = z.object({
+  projectManagerAccess: z.boolean(),
+}).strict();
+
 export const manpowerActiveSchema = z.object({
   active: z.boolean(),
 });
@@ -61,6 +65,13 @@ export const projectMembershipSchema = z.object({
 }).strict();
 
 export const projectManagerAssignmentSchema = projectMembershipSchema;
+
+export const projectManagerAssignmentsSchema = z.object({
+  projectIds: z.array(positiveId).refine(
+    (projectIds) => new Set(projectIds).size === projectIds.length,
+    "Project IDs must be unique.",
+  ),
+}).strict();
 
 export const reportQuerySchema = z.object({
   projectId: positiveId.optional(),

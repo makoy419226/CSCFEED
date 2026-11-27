@@ -89,8 +89,9 @@ function createDb(role, report, attachments = []) {
   };
 }
 
-function createProjectExportDb(projectManagerProjectId, reportRows, attachmentRows) {
+function createProjectExportDb(projectManagerProjectIds, reportRows, attachmentRows) {
   let selectCalls = 0;
+  const ids = Array.isArray(projectManagerProjectIds) ? projectManagerProjectIds : [projectManagerProjectIds];
   return {
     select() {
       const call = ++selectCalls;
@@ -103,14 +104,14 @@ function createProjectExportDb(projectManagerProjectId, reportRows, attachmentRo
           return [{
             id: 8,
             name: "Project Manager",
-            role: "employee",
+            role: "project_manager",
             punchId: "2468",
             username: "2468",
-            projectManagerProjectId: String(projectManagerProjectId),
           }];
         },
         async orderBy() {
-          return call === 2 ? reportRows : attachmentRows;
+          if (call === 2) return ids.map((id) => ({ id }));
+          return call === 3 ? reportRows : attachmentRows;
         },
       };
     },
@@ -240,7 +241,7 @@ test("Project Manager project export includes a PDF and evidence for each assign
   ];
 
   await withReportsApp(
-    createProjectExportDb(5, reportRows, attachmentRows),
+    createProjectExportDb([5, 6], reportRows, attachmentRows),
     async (get) => {
       const response = await get();
       const archive = Buffer.from(await response.arrayBuffer());

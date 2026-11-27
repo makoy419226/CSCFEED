@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { connect, createServer } from "node:net";
+import { userInfo } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
@@ -11,6 +12,7 @@ import pg from "pg";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const envPath = path.join(root, ".env");
 const { Client } = pg;
+const defaultPostgresAdminUsername = process.platform === "darwin" ? userInfo().username : "postgres";
 const skipDatabaseStartup = process.argv.includes("--skip-database");
 // --prepare-only: start PostgreSQL, create/repair the database, run migrations, then exit
 // without starting the dev servers (used by scripts/start-local.js).
@@ -238,7 +240,7 @@ async function recoverLocalDatabaseCredentials() {
   }
 
   console.info("Credential recovery requires a PostgreSQL administrator for this local server.");
-  const adminUser = await askText("PostgreSQL administrator username", "postgres");
+  const adminUser = await askText("PostgreSQL administrator username", defaultPostgresAdminUsername);
   const adminPassword = await askSecret("PostgreSQL administrator password");
   if (!adminPassword) throw new Error("The PostgreSQL administrator password cannot be empty.");
 
@@ -330,7 +332,7 @@ async function bootstrapLocalDatabase() {
   const host = "127.0.0.1";
   const port = 5432;
   console.info(`Using local PostgreSQL at ${host}:${port} (5001 is the CSC Feed API port).`);
-  const adminUser = await askText("PostgreSQL administrator username", "postgres");
+  const adminUser = await askText("PostgreSQL administrator username", defaultPostgresAdminUsername);
   const adminPassword = await askSecret("PostgreSQL administrator password");
   if (!adminPassword) throw new Error("The PostgreSQL administrator password cannot be empty.");
 
@@ -486,6 +488,7 @@ async function main() {
       "002_admin_roles.sql",
       "003_account_and_report_deletion.sql",
       "004_project_managers.sql",
+      "005_project_manager_appointments.sql",
     ].map((fileName) => readFile(path.join(root, "database", "migrations", fileName), "utf8")));
     await migrationClient.query("BEGIN");
     try {
