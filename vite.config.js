@@ -8,8 +8,10 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
+      host: "0.0.0.0",
       port: 5173,
       strictPort: true,
+      allowedHosts: [".github.dev", ".githubpreview.dev", ".devtunnels.ms"],
       proxy: {
         "/api": {
           target: apiServerUrl,

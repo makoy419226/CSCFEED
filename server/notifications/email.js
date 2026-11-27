@@ -48,7 +48,7 @@ export async function notifyReportCreated(report) {
       `Uploaded by: ${report.uploaderName}`,
       `Report date: ${report.reportDate}`,
       `Description: ${report.description || "(none)"}`,
-      `File: ${report.fileName}`,
+      `Files:\n${report.fileNames.map((fileName) => `- ${fileName}`).join("\n")}`,
     ].join("\n"),
   });
   return "sent";

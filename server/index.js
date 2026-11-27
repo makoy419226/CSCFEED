@@ -10,6 +10,20 @@ let db;
 let client;
 let ready = false;
 
+function isDatabaseStartupError(error) {
+  if (error?.message === "DATABASE_URL is not configured.") return true;
+  return [
+    "28P01",
+    "3D000",
+    "42P01",
+    "42501",
+    "3F000",
+    "ECONNREFUSED",
+    "ENOTFOUND",
+    "ETIMEDOUT",
+  ].includes(error?.code);
+}
+
 async function start() {
   try {
     ({ db, client } = getDatabase());
@@ -18,14 +32,20 @@ async function start() {
     await prepareLocalStorage();
     ready = true;
   } catch (error) {
-    console.error("CSC Feed API startup failed:", error instanceof Error ? error.message : error);
-    if (client) await client.end().catch((closeError) => console.error("Could not close the database pool:", closeError));
-    process.exitCode = 1;
-    return;
+    if (isProduction || !isDatabaseStartupError(error)) {
+      console.error("CSC Feed API startup failed:", error instanceof Error ? error.message : error);
+      if (client) await client.end().catch((closeError) => console.error("Could not close the database pool:", closeError));
+      process.exitCode = 1;
+      return;
+    }
+    console.error(
+      "CSC Feed API starting in degraded mode; PostgreSQL-backed routes will return 503:",
+      error instanceof Error ? error.message : error,
+    );
   }
 
   const app = createApp({ db, ready: () => ready, maxUploadBytes });
-  const host = isProduction ? "0.0.0.0" : "127.0.0.1";
+  const host = "0.0.0.0";
   const server = app.listen(port, host, () => {
     console.info(`CSC Feed API listening on http://${host}:${port}`);
   });

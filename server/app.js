@@ -13,7 +13,7 @@ export function createApp({ db, ready, maxUploadBytes }) {
   const isProduction = process.env.NODE_ENV === "production";
 
   app.disable("x-powered-by");
-  app.set("trust proxy", isProduction ? 1 : false);
+  app.set("trust proxy", isProduction ? 1 : "loopback");
   app.use("/api", (_req, res, next) => {
     res.setHeader("Cache-Control", "no-store");
     next();

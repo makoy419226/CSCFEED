@@ -63,3 +63,18 @@ export const reports = cscfeed.table("reports", {
   index("reports_project_date_idx").on(table.projectId, table.reportDate),
   index("reports_uploader_date_idx").on(table.uploadedBy, table.reportDate),
 ]);
+
+export const reportFiles = cscfeed.table("report_files", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  reportId: bigint("report_id", { mode: "number" })
+    .notNull()
+    .references(() => reports.id, { onDelete: "cascade" }),
+  fileName: text("file_name").notNull(),
+  storageKey: text("storage_key").notNull(),
+  contentType: text("content_type").notNull(),
+  fileSizeBytes: bigint("file_size_bytes", { mode: "number" }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("report_files_storage_key_unique").on(table.storageKey),
+  index("report_files_report_id_idx").on(table.reportId),
+]);

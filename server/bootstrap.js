@@ -1,14 +1,8 @@
 import bcrypt from "bcryptjs";
 import { eq, sql } from "drizzle-orm";
-import { accounts, authCredentials, projects } from "../src/db/schema.js";
+import { accounts, authCredentials } from "../src/db/schema.js";
 
 const reservedAdminPunchId = "0000";
-const starterProjects = [
-  { name: "Harbor Point Residences", description: "", color: "blue" },
-  { name: "Northline Logistics Hub", description: "", color: "orange" },
-  { name: "Cedar Grove School", description: "", color: "green" },
-  { name: "Metro West Utilities", description: "", color: "purple" },
-];
 
 export async function bootstrapApplication({ db }) {
   const password = process.env.BOOTSTRAP_ADMIN_PASSWORD || (
@@ -90,14 +84,5 @@ export async function bootstrapApplication({ db }) {
     await db.update(authCredentials)
       .set({ passwordHash: await bcrypt.hash(password, 12) })
       .where(eq(authCredentials.username, "admin"));
-  }
-
-  const [existingProject] = await db.select({ id: projects.id }).from(projects).limit(1);
-  if (!existingProject) {
-    await db.transaction(async (tx) => {
-      for (const project of starterProjects) {
-        await tx.insert(projects).values({ ...project, createdBy: accountId }).onConflictDoNothing();
-      }
-    });
   }
 }

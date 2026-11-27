@@ -1,0 +1,18 @@
+{
+  "remote.autoForwardPorts": true,
+  "remote.portsAttributes": {
+    "5173": {
+      "label": "CSC Feed Web",
+      "onAutoForward": "openBrowser"
+    },
+    "5001": {
+      "label": "CSC Feed API",
+      "onAutoForward": "ignore"
+    },
+    "5432": {
+      "label": "postgres",
+      "onAutoForward": "silent",
+      "visibility": "private"
+    }
+  }
+}

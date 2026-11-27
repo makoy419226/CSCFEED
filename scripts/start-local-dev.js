@@ -11,11 +11,13 @@ import pg from "pg";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const envPath = path.join(root, ".env");
 const { Client } = pg;
+const skipDatabaseStartup = process.argv.includes("--skip-database");
 process.chdir(root);
 config({ path: envPath });
 
 function isTemplateUrl(value) {
-  return !value || value.includes("change-me");
+  if (!value) return true;
+  return decodeURIComponent(new URL(value).password) === "change-me";
 }
 
 function connectionUrl({ user, password, host, port, database }) {
@@ -51,8 +53,8 @@ async function assertPortAvailable(port, service, hosts) {
 
 async function assertDevelopmentPortsAvailable() {
   const apiPort = Number(process.env.PORT || 5001);
-  await assertPortAvailable(apiPort, "API", ["127.0.0.1"]);
-  await assertPortAvailable(5173, "Web", ["127.0.0.1", "::1"]);
+  await assertPortAvailable(apiPort, "API", ["127.0.0.1", "::"]);
+  await assertPortAvailable(5173, "Web", ["127.0.0.1", "::1", "::"]);
 }
 
 async function askText(prompt, defaultValue) {
@@ -138,15 +140,82 @@ async function connectClient(url, label) {
   } catch (error) {
     await client.end().catch(() => {});
     if (error.code === "28P01") {
-      throw new Error(`${label} credentials were rejected. Check the local .env connection settings.`);
+      const credentialError = new Error(`${label} credentials were rejected. Check the local .env connection settings.`);
+      credentialError.code = error.code;
+      throw credentialError;
     }
     if (error.code === "3D000") {
       throw new Error(`${label} database does not exist. Use the first-run setup with an unused local database, or correct .env.`);
     }
     if (error.code === "ECONNREFUSED" || error.code === "ENOTFOUND") {
-      throw new Error(`Could not connect to PostgreSQL for ${label}. Confirm the service and host/port, then retry.`);
+      const { hostname, port } = new URL(url);
+      if (Number(port) === Number(process.env.PORT || 5001)) {
+        throw new Error(`Could not connect to PostgreSQL for ${label} at ${hostname}:${port}. Port ${port} is the CSC Feed API port; PostgreSQL usually listens on 5432. Check the PostgreSQL host and port, then retry.`);
+      }
+      throw new Error(`Could not connect to PostgreSQL for ${label} at ${hostname}:${port} (${error.code}). Confirm the PostgreSQL service is listening at this address, then retry.`);
     }
     throw new Error(`Could not connect to PostgreSQL for ${label}: ${error.message}`);
+  }
+}
+
+async function recoverLocalDatabaseCredentials() {
+  const migrationUrl = new URL(process.env.MIGRATION_DATABASE_URL);
+  const databaseUrl = new URL(process.env.DATABASE_URL);
+  const loopbackHosts = ["127.0.0.1", "localhost", "::1", "[::1]"];
+  if (
+    !loopbackHosts.includes(migrationUrl.hostname) ||
+    migrationUrl.hostname !== databaseUrl.hostname ||
+    migrationUrl.port !== databaseUrl.port ||
+    migrationUrl.pathname !== databaseUrl.pathname ||
+    decodeURIComponent(migrationUrl.username) !== "cscfeed_owner" ||
+    decodeURIComponent(databaseUrl.username) !== "cscfeed_app" ||
+    migrationUrl.pathname !== "/cscfeed"
+  ) {
+    throw new Error("Automatic credential recovery is limited to the local cscfeed database and its dedicated roles. Correct .env manually.");
+  }
+  if (!process.stdin.isTTY) {
+    throw new Error("Run npm run dev in an interactive terminal to recover PostgreSQL credentials.");
+  }
+
+  const confirmation = await askText(
+    "Rotate the local cscfeed_owner and cscfeed_app passwords? Database contents will not be changed (y/N)",
+    "N",
+  );
+  if (!/^y(es)?$/i.test(confirmation)) {
+    throw new Error("PostgreSQL credential recovery was not confirmed. Correct the connection passwords in .env and retry.");
+  }
+
+  console.info("Credential recovery requires a PostgreSQL administrator for this local server.");
+  const adminUser = await askText("PostgreSQL administrator username", "postgres");
+  const adminPassword = await askSecret("PostgreSQL administrator password");
+  if (!adminPassword) throw new Error("The PostgreSQL administrator password cannot be empty.");
+
+  const adminUrl = new URL(migrationUrl);
+  adminUrl.username = adminUser;
+  adminUrl.password = adminPassword;
+  adminUrl.pathname = "/postgres";
+  adminUrl.search = "";
+  adminUrl.hash = "";
+  const admin = await connectClient(adminUrl.toString(), "PostgreSQL administrator");
+  try {
+    const existingRoles = await admin.query(
+      "SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])",
+      [["cscfeed_owner", "cscfeed_app"]],
+    );
+    if (existingRoles.rowCount !== 2) {
+      throw new Error("The expected cscfeed_owner and cscfeed_app roles were not both found; no passwords were changed.");
+    }
+    const existingDatabase = await admin.query(
+      "SELECT 1 FROM pg_database WHERE datname = $1",
+      ["cscfeed"],
+    );
+    if (!existingDatabase.rowCount) {
+      throw new Error("The cscfeed database was not found; no passwords were changed.");
+    }
+
+    await rotateLocalRolePasswords(admin, migrationUrl, databaseUrl);
+  } finally {
+    await admin.end();
   }
 }
 
@@ -176,17 +245,39 @@ async function saveDatabaseUrls(databaseUrl, migrationUrl) {
   });
 }
 
+async function rotateLocalRolePasswords(admin, migrationUrl, databaseUrl) {
+  const roles = [
+    { name: "cscfeed_owner", url: migrationUrl, password: randomBytes(32).toString("hex") },
+    { name: "cscfeed_app", url: databaseUrl, password: randomBytes(32).toString("hex") },
+  ];
+  await admin.query("BEGIN");
+  try {
+    for (const role of roles) {
+      await admin.query(`ALTER ROLE ${quoteIdentifier(role.name)} WITH PASSWORD '${role.password}'`);
+    }
+    await admin.query("COMMIT");
+  } catch (error) {
+    await admin.query("ROLLBACK");
+    throw error;
+  }
+
+  for (const role of roles) role.url.password = role.password;
+  const nextMigrationUrl = migrationUrl.toString();
+  const nextDatabaseUrl = databaseUrl.toString();
+  await saveDatabaseUrls(nextDatabaseUrl, nextMigrationUrl);
+  process.env.MIGRATION_DATABASE_URL = nextMigrationUrl;
+  process.env.DATABASE_URL = nextDatabaseUrl;
+  console.info("Updated the local PostgreSQL role passwords and saved the new URLs to the Git-ignored .env.");
+}
+
 async function bootstrapLocalDatabase() {
   if (!process.stdin.isTTY) {
-    throw new Error("Run npm run dev:local in an interactive terminal to finish first-run PostgreSQL setup.");
+    throw new Error("Run npm run dev in an interactive terminal to set up or recover local PostgreSQL.");
   }
-  console.info("First-run setup: create a local cscfeed database and dedicated roles.");
-  const host = await askText("PostgreSQL host", "127.0.0.1");
-  const portText = await askText("PostgreSQL port", "5432");
-  const port = Number(portText);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error("PostgreSQL port must be a number from 1 to 65535.");
-  }
+  console.info("Local PostgreSQL setup: create a new cscfeed database, or recover its existing dedicated roles.");
+  const host = "127.0.0.1";
+  const port = 5432;
+  console.info(`Using local PostgreSQL at ${host}:${port} (5001 is the CSC Feed API port).`);
   const adminUser = await askText("PostgreSQL administrator username", "postgres");
   const adminPassword = await askSecret("PostgreSQL administrator password");
   if (!adminPassword) throw new Error("The PostgreSQL administrator password cannot be empty.");
@@ -206,12 +297,36 @@ async function bootstrapLocalDatabase() {
       "SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])",
       [["cscfeed_owner", "cscfeed_app"]],
     );
-    if (roles.rowCount) {
-      throw new Error("A cscfeed_owner or cscfeed_app role already exists. Configure valid URLs in .env; existing role passwords will not be changed.");
-    }
     const database = await admin.query("SELECT 1 FROM pg_database WHERE datname = $1", ["cscfeed"]);
-    if (database.rowCount) {
-      throw new Error("The cscfeed database already exists. It will not be modified by first-run setup; configure its existing URLs in .env.");
+    if (roles.rowCount || database.rowCount) {
+      if (roles.rowCount !== 2 || !database.rowCount) {
+        throw new Error("An incomplete cscfeed setup already exists. It will not be modified; configure its existing roles and database manually.");
+      }
+      const confirmation = await askText(
+        "The local cscfeed database and roles already exist. Rotate their passwords without changing database contents (y/N)",
+        "N",
+      );
+      if (!/^y(es)?$/i.test(confirmation)) {
+        throw new Error("PostgreSQL credential recovery was not confirmed. Correct the connection passwords in .env and retry.");
+      }
+      await rotateLocalRolePasswords(
+        admin,
+        new URL(connectionUrl({
+          user: "cscfeed_owner",
+          password: "",
+          host,
+          port,
+          database: "cscfeed",
+        })),
+        new URL(connectionUrl({
+          user: "cscfeed_app",
+          password: "",
+          host,
+          port,
+          database: "cscfeed",
+        })),
+      );
+      return;
     }
 
     const ownerPassword = randomBytes(32).toString("hex");
@@ -271,18 +386,30 @@ async function grantRuntimeAccess(migrationClient, databaseUrl) {
   await migrationClient.query(`ALTER DEFAULT PRIVILEGES FOR ROLE ${ownerRole} IN SCHEMA cscfeed GRANT USAGE, SELECT ON SEQUENCES TO ${runtimeRole}`);
 }
 
-async function run(command, args) {
+async function runNpm(args) {
+  const npmCliPath = process.env.npm_execpath;
+  if (!npmCliPath) {
+    throw new Error("Could not locate the npm CLI. Start this script with `npm run dev`.");
+  }
+
   await new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: root, stdio: "inherit", shell: process.platform === "win32" });
+    const child = spawn(process.execPath, [npmCliPath, ...args], { cwd: root, stdio: "inherit" });
     child.once("error", reject);
-    child.once("close", (code) => {
+    child.once("close", (code, signal) => {
       if (code === 0) resolve();
-      else reject(new Error(`${command} ${args.join(" ")} exited with code ${code}.`));
+      else reject(new Error(`npm ${args.join(" ")} exited with code ${code ?? signal}.`));
     });
   });
 }
 
 async function main() {
+  if (skipDatabaseStartup) {
+    await assertDevelopmentPortsAvailable();
+    console.info("Skipping PostgreSQL checks and migrations. Starting the development stack; database-backed API routes may be unavailable.");
+    await runNpm(["run", "dev:stack"]);
+    return;
+  }
+
   await startPostgresServiceIfStopped();
   await assertDevelopmentPortsAvailable();
 
@@ -293,7 +420,14 @@ async function main() {
     throw new Error("DATABASE_URL and MIGRATION_DATABASE_URL must be configured in .env.");
   }
 
-  const migrationClient = await connectClient(process.env.MIGRATION_DATABASE_URL, "migration");
+  let migrationClient;
+  try {
+    migrationClient = await connectClient(process.env.MIGRATION_DATABASE_URL, "migration");
+  } catch (error) {
+    if (error.code !== "28P01") throw error;
+    await recoverLocalDatabaseCredentials();
+    migrationClient = await connectClient(process.env.MIGRATION_DATABASE_URL, "migration");
+  }
   try {
     const migrationSql = await readFile(path.join(root, "database", "migrations", "001_core.sql"), "utf8");
     await migrationClient.query("BEGIN");
@@ -304,13 +438,20 @@ async function main() {
       await migrationClient.query("ROLLBACK");
       throw error;
     }
-    await run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "db:migrate"]);
+    await runNpm(["run", "db:migrate"]);
     await grantRuntimeAccess(migrationClient, process.env.DATABASE_URL);
   } finally {
     await migrationClient.end();
   }
 
-  const runtimeClient = await connectClient(process.env.DATABASE_URL, "application");
+  let runtimeClient;
+  try {
+    runtimeClient = await connectClient(process.env.DATABASE_URL, "application");
+  } catch (error) {
+    if (error.code !== "28P01") throw error;
+    await recoverLocalDatabaseCredentials();
+    runtimeClient = await connectClient(process.env.DATABASE_URL, "application");
+  }
   try {
     await runtimeClient.query("SELECT 1");
   } finally {
@@ -318,7 +459,7 @@ async function main() {
   }
 
   console.info("Database is ready. Starting the CSC Feed API and web app...");
-  await run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "dev:stack"]);
+  await runNpm(["run", "dev:stack"]);
 }
 
 main().catch((error) => {

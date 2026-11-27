@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Eye, EyeOff, KeyRound, LoaderCircle, LogIn, UserRound } from "lucide-react";
 
 function isJsonResponse(response) {
@@ -6,6 +6,10 @@ function isJsonResponse(response) {
 }
 
 export default function Login({ onLogin, serviceMessage = "" }) {
+  const [isIntroPlaying, setIsIntroPlaying] = useState(() =>
+    !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+  const [isIntroFadingOut, setIsIntroFadingOut] = useState(false);
   const [mode, setMode] = useState("employee");
   const [employeeId, setEmployeeId] = useState("");
   const [username, setUsername] = useState("");
@@ -13,6 +17,18 @@ export default function Login({ onLogin, serviceMessage = "" }) {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(serviceMessage);
+
+  useEffect(() => {
+    if (!isIntroPlaying || isIntroFadingOut) return undefined;
+    const timeout = window.setTimeout(() => setIsIntroFadingOut(true), 10000);
+    return () => window.clearTimeout(timeout);
+  }, [isIntroPlaying, isIntroFadingOut]);
+
+  useEffect(() => {
+    if (!isIntroFadingOut) return undefined;
+    const timeout = window.setTimeout(() => setIsIntroPlaying(false), 200);
+    return () => window.clearTimeout(timeout);
+  }, [isIntroFadingOut]);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -73,6 +89,28 @@ export default function Login({ onLogin, serviceMessage = "" }) {
   };
 
   const isEmployee = mode === "employee";
+
+  if (isIntroPlaying) {
+    return (
+      <main className={`login-intro ${isIntroFadingOut ? "login-intro-exit" : ""}`} aria-label="CSC Feed introduction">
+        <video
+          className="login-intro-video"
+          autoPlay
+          muted
+          playsInline
+          preload="auto"
+          aria-label="Concord Stars Contracting logo animation"
+          onEnded={() => setIsIntroFadingOut(true)}
+          onError={() => setIsIntroFadingOut(true)}
+        >
+          <source src="/logo-animation.mp4" type="video/mp4" />
+        </video>
+        <button className="login-intro-skip" type="button" onClick={() => setIsIntroFadingOut(true)}>
+          Skip introduction
+        </button>
+      </main>
+    );
+  }
 
   return (
     <main className="login-shell">

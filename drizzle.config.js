@@ -7,7 +7,7 @@ if (!migrationUrl) {
 }
 
 export default defineConfig({
-  schema: "./src/db/auth-schema.js",
+  schema: "./src/db/schema.js",
   out: "./database/drizzle",
   dialect: "postgresql",
   migrations: {
@@ -18,5 +18,5 @@ export default defineConfig({
     url: migrationUrl,
   },
   schemaFilter: ["cscfeed"],
-  tablesFilter: ["auth_credentials", "auth_sessions"],
+  tablesFilter: ["auth_credentials", "auth_sessions", "report_files"],
 });

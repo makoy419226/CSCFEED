@@ -5,6 +5,7 @@ const positiveId = z.coerce.number().int().positive();
 const punchId = z.string().trim().regex(/^\d{3,10}$/, "Punch ID must contain 3 to 10 digits.");
 
 export const idParamsSchema = z.object({ id: positiveId });
+export const reportFileParamsSchema = z.object({ id: positiveId, fileId: positiveId });
 export const punchIdParamsSchema = z.object({ punchId });
 
 export const loginSchema = z.union([
