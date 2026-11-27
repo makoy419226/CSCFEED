@@ -8,7 +8,11 @@ A responsive frontend skeleton for sharing reports across multiple projects. The
 npm install
 ```
 
-Copy `.env.example` to `.env`, configure the database connections, and follow the PostgreSQL setup below before `npm run dev`.
+After installing PostgreSQL and Node.js, run `.\scripts\start-local.ps1` in PowerShell or `npm run dev`. Both use the same preflight/setup flow and check that the API and web ports are free. On first run, the Node setup asks for the PostgreSQL administrator credentials, creates the `cscfeed` database and dedicated owner/app roles with generated passwords, writes their connection URLs to the Git-ignored `.env`, applies both migrations, grants the app role access, and starts the app. The administrator password is entered without echo and is not saved. Existing `cscfeed` roles or databases are never overwritten; configure their valid URLs in `.env` instead.
+
+The script starts a stopped PostgreSQL Windows service if exactly one is installed. If service permissions prevent this, start PostgreSQL from Windows Services and rerun the script. It does not terminate a process that already owns the API port. `npm run dev:stack` runs the API and web processes directly without preflight or database migrations.
+
+To configure an existing database manually, copy `.env.example` to `.env` and set valid `DATABASE_URL` and `MIGRATION_DATABASE_URL` values before running `npm run dev:local`.
 
 ## Prototype scope
 

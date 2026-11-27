@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n api,web \"npm:dev:api\" \"npm:dev:web\"",
+    "dev": "node scripts/start-local-dev.js",
+    "dev:local": "npm run dev",
+    "dev:stack": "concurrently -k -n api,web \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "node server/index.js",
     "dev:web": "vite",
     "start": "node server/index.js",

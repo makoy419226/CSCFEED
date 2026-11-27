@@ -20,11 +20,8 @@ button { cursor: pointer; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #2874e866; outline-offset: 2px; }
 .app-shell { min-height: 100vh; }
 .auth-loading { display: grid; min-height: 100vh; place-items: center; color: #64748b; font-size: 13px; }
-.login-shell { position: relative; display: grid; min-height: 100vh; overflow: hidden; place-items: center; padding: 24px; background: linear-gradient(135deg, #f8fafc, #edf3fa); }
-.login-decoration { position: absolute; width: 440px; height: 440px; border-radius: 50%; filter: blur(1px); pointer-events: none; }
-.login-decoration-one { top: -250px; right: -120px; background: radial-gradient(circle, #f7bf5c30, #f7bf5c00 70%); }
-.login-decoration-two { bottom: -290px; left: -150px; background: radial-gradient(circle, #2874e81c, #2874e800 70%); }
-.login-card { position: relative; z-index: 1; width: min(100%, 430px); padding: 34px 38px 27px; border: 1px solid #e4e9f1; border-radius: 16px; background: #ffffffed; box-shadow: 0 24px 70px #24364e1a; text-align: center; }
+.login-shell { position: relative; display: grid; min-height: 100vh; overflow: hidden; place-items: center start; padding: 24px clamp(24px, 8vw, 120px); background: linear-gradient(100deg, #081624bd, #09152280 53%, #101a2d70), url("/login-background.png") 60% center / cover no-repeat; }
+.login-card { position: relative; z-index: 1; width: min(100%, 430px); padding: 34px 38px 27px; border: 1px solid #ffffffa6; border-radius: 16px; background: #fffffff2; box-shadow: 0 24px 70px #07111f66; backdrop-filter: blur(7px); text-align: center; }
 .login-logo { display: block; width: 88px; height: 88px; margin: 0 auto 13px; object-fit: contain; }
 .login-company { color: #26364c; font-size: 11px; font-weight: 800; letter-spacing: .45px; }
 .login-product { margin-top: 5px; color: #3974bd; font-size: 10px; font-weight: 700; letter-spacing: 1.4px; }
@@ -274,7 +271,7 @@ tbody tr:hover:not(:has(.empty-state)) { background: #fbfcfe; }
   .integration-note button { margin-top: 1px; }
 }
 @media (max-width: 480px) {
-  .login-shell { padding: 15px; }
+  .login-shell { place-items: center; padding: 15px; background-position: 64% center; }
   .login-card { padding: 28px 22px 23px; }
   .login-logo { width: 76px; height: 76px; }
   .login-heading h1 { font-size: 22px; }

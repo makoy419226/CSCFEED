@@ -76,8 +76,6 @@ export default function Login({ onLogin, serviceMessage = "" }) {
 
   return (
     <main className="login-shell">
-      <div className="login-decoration login-decoration-one" aria-hidden="true" />
-      <div className="login-decoration login-decoration-two" aria-hidden="true" />
       <section className="login-card" aria-labelledby="login-title">
         <img className="login-logo" src="/concord-logo.png" alt="Concord logo" />
         <p className="login-company">CONCORD STARS CONTRACTING L.L.C.</p>
