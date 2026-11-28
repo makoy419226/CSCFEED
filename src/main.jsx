@@ -639,6 +639,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
     projectFilter === "all" || report.projectId === projectFilter,
   ), [matchingReports, projectFilter]);
   const allReportsSelected = reports.length > 0 && reports.every((report) => selectedReportIds.includes(report.id));
+  const clearReportSelection = useCallback(() => setSelectedReportIds([]), []);
   const projectReportCounts = useMemo(() => {
     const counts = new Map(projects.map((project) => [project.id, 0]));
     matchingReports.forEach((report) => counts.set(report.projectId, (counts.get(report.projectId) || 0) + 1));
@@ -647,8 +648,18 @@ function Workspace({ user, onLogout, onUserUpdated }) {
 
   useEffect(() => {
     const handleSelectAllReports = (event) => {
-      if ((!event.ctrlKey && !event.metaKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "a") return;
-      if (!isAdministrator || reports.length === 0 || !["Overview", "Reports"].includes(activePage) || document.querySelector('[role="dialog"]')) return;
+      const selectAllShortcut = (event.ctrlKey || event.metaKey)
+        && !event.altKey
+        && !event.shiftKey
+        && event.key.toLowerCase() === "a";
+      const clearShortcut = event.key === "Escape"
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.altKey
+        && !event.shiftKey;
+      if (!selectAllShortcut && !clearShortcut) return;
+      if (!isSuperUser || !["Overview", "Reports"].includes(activePage) || document.querySelector('[role="dialog"]')) return;
+      if (selectAllShortcut && reports.length === 0) return;
       const target = event.target;
       if (target instanceof HTMLElement
         && (target.isContentEditable || target.closest('input:not([type="checkbox"]):not([type="radio"]), textarea, select, [role="textbox"]'))) {
@@ -656,12 +667,13 @@ function Workspace({ user, onLogout, onUserUpdated }) {
       }
 
       event.preventDefault();
-      setSelectedReportIds(reports.map((report) => report.id));
+      if (clearShortcut || allReportsSelected) clearReportSelection();
+      else setSelectedReportIds(reports.map((report) => report.id));
     };
 
     window.addEventListener("keydown", handleSelectAllReports);
     return () => window.removeEventListener("keydown", handleSelectAllReports);
-  }, [activePage, isAdministrator, reports]);
+  }, [activePage, allReportsSelected, clearReportSelection, isSuperUser, reports]);
 
   const filteredManpower = useMemo(() => manpower.filter((person) =>
     `${person.punchId} ${person.name} ${person.designation}`.toLowerCase().includes(manpowerSearch.trim().toLowerCase()),
@@ -1302,7 +1314,8 @@ function Workspace({ user, onLogout, onUserUpdated }) {
 
   const toggleSelectAllReports = () => {
     if (!isSuperUser) return;
-    setSelectedReportIds(allReportsSelected ? [] : reports.map((report) => report.id));
+    if (allReportsSelected) clearReportSelection();
+    else setSelectedReportIds(reports.map((report) => report.id));
   };
 
   const deleteSelectedReports = async () => {
@@ -1856,9 +1869,18 @@ function Workspace({ user, onLogout, onUserUpdated }) {
                 </div>
                 {isSuperUser && <div className="report-selection-toolbar">
                   <span>{selectedReportIds.length
-                    ? `${selectedReportIds.length} selected across report filters`
-                    : `Select reports to permanently clear them and their evidence files. Ctrl+A / ⌘A selects all ${reports.length} active reports.`}</span>
-                  <button type="button" className="button button-secondary" onClick={toggleSelectAllReports} disabled={!reports.length || isDeletingReports}>
+                    ? `${selectedReportIds.length} selected across report filters. Press Ctrl+A / ⌘A again or Esc to clear selection.`
+                    : `Select reports to permanently clear them and their evidence files. Ctrl+A / ⌘A selects all ${reports.length} active reports; press again or Esc to clear.`}</span>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    onClick={toggleSelectAllReports}
+                    onDoubleClick={(event) => {
+                      event.preventDefault();
+                      clearReportSelection();
+                    }}
+                    disabled={!reports.length || isDeletingReports}
+                  >
                     {allReportsSelected ? "Clear selection" : `Select all ${reports.length} reports`}
                   </button>
                   <button type="button" className="button button-danger" onClick={deleteSelectedReports} disabled={!selectedReportIds.length || isDeletingReports}>
@@ -1898,13 +1920,24 @@ function Workspace({ user, onLogout, onUserUpdated }) {
                     <tbody>
                       {filteredReports.map((report) => {
                         const project = projects.find((item) => item.id === report.projectId);
-                        return <tr key={report.id}>
+                        return <tr
+                          key={report.id}
+                          onDoubleClick={(event) => {
+                            const target = event.target;
+                            if (target instanceof Element && target.closest("button, input, select, textarea, a")) return;
+                            toggleReportSelection(report.id, false);
+                          }}
+                        >
                           {isSuperUser && <td data-label="Select"><input
                             className="report-selection-checkbox"
                             type="checkbox"
                             aria-label={`Select ${report.title} for permanent deletion`}
                             checked={selectedReportIds.includes(report.id)}
                             onChange={(event) => toggleReportSelection(report.id, event.target.checked)}
+                            onDoubleClick={(event) => {
+                              event.preventDefault();
+                              toggleReportSelection(report.id, false);
+                            }}
                           /></td>}
                           <td className="report-cell" data-label="Title"><span className="file-icon"><FileText size={18} /></span><button className="report-copy report-open" onClick={() => setSelectedReport(report)} aria-label={`View details for ${report.title}`}><strong>{report.title}</strong></button></td>
                           <td className="report-description-cell" data-label="Description"><span>{report.description || "—"}</span></td>
@@ -2431,9 +2464,24 @@ function Workspace({ user, onLogout, onUserUpdated }) {
 function MobileReportCard({ report, project, isAdministrator, canDelete, canManage, isSelected, onOpen, onEdit, onDownload, onArchive, onToggleSelection }) {
   const attachments = report.files?.length ? report.files : [report];
 
-  return <article className="mobile-report-card">
+  return <article
+    className="mobile-report-card"
+    onDoubleClick={(event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest("button, input, select, textarea, a")) return;
+      onToggleSelection(false);
+    }}
+  >
     {canDelete && <label className="report-selection-control">
-      <input type="checkbox" checked={isSelected} onChange={(event) => onToggleSelection(event.target.checked)} />
+      <input
+        type="checkbox"
+        checked={isSelected}
+        onChange={(event) => onToggleSelection(event.target.checked)}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          onToggleSelection(false);
+        }}
+      />
       <span>Select for deletion</span>
     </label>}
     <div className="mobile-report-card-heading">
@@ -2517,15 +2565,72 @@ function AdminSettingsPage({ profileForm, setProfileForm, profileError, isSaving
 }
 
 function ProjectsPage({ projects: projectList, reports, onSelect, onCreate, onEdit, onDelete, canCreate, canManage, canExport, onExport }) {
+  const [selectedProjectIds, setSelectedProjectIds] = useState([]);
+  const clearProjectSelection = useCallback(() => setSelectedProjectIds([]), []);
+  const allProjectIds = useMemo(() => projectList.map((project) => String(project.id)), [projectList]);
+  const allProjectsSelected = allProjectIds.length > 0 && allProjectIds.every((id) => selectedProjectIds.includes(id));
+
+  useEffect(() => {
+    const availableProjectIds = new Set(allProjectIds);
+    setSelectedProjectIds((current) => {
+      const next = current.filter((id) => availableProjectIds.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [allProjectIds]);
+
+  useEffect(() => {
+    const handleSelectAllProjects = (event) => {
+      const selectAllShortcut = (event.ctrlKey || event.metaKey)
+        && !event.altKey
+        && !event.shiftKey
+        && event.key.toLowerCase() === "a";
+      const clearShortcut = event.key === "Escape"
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.altKey
+        && !event.shiftKey;
+      if (!selectAllShortcut && !clearShortcut) return;
+      if (document.querySelector('[role="dialog"]') || (selectAllShortcut && projectList.length === 0)) return;
+      const target = event.target;
+      if (target instanceof HTMLElement
+        && (target.isContentEditable || target.closest('input:not([type="checkbox"]):not([type="radio"]), textarea, select, [role="textbox"]'))) {
+        return;
+      }
+
+      event.preventDefault();
+      if (clearShortcut || allProjectsSelected) clearProjectSelection();
+      else setSelectedProjectIds(allProjectIds);
+    };
+
+    window.addEventListener("keydown", handleSelectAllProjects);
+    return () => window.removeEventListener("keydown", handleSelectAllProjects);
+  }, [allProjectIds, allProjectsSelected, clearProjectSelection, projectList]);
+
   return <section className="projects-page">
     <div className="page-heading">
       <div><div className="eyebrow"><span className="eyebrow-dot" /> WORKSPACE</div><h1>Your projects</h1><p>Choose a project to see its reports and updates.</p></div>
       {canCreate && <button className="button button-primary" onClick={onCreate}><Plus size={17} /> New project</button>}
     </div>
+    <div className="manpower-selection-toolbar project-selection-toolbar">
+      <span><strong>{selectedProjectIds.length}</strong> project{selectedProjectIds.length === 1 ? "" : "s"} selected</span>
+      <span className="selection-shortcut-hint">Ctrl+A / ⌘A selects all · press again or Esc to clear</span>
+      <button
+        type="button"
+        className="button button-secondary"
+        title="Double-click to deselect all projects"
+        disabled={!projectList.length}
+        onClick={() => setSelectedProjectIds(allProjectsSelected ? [] : allProjectIds)}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          clearProjectSelection();
+        }}
+      >{allProjectsSelected ? "Deselect all" : `Select all ${projectList.length} projects`}</button>
+      <button type="button" className="button button-secondary" disabled={!selectedProjectIds.length} onClick={clearProjectSelection}>Clear selection</button>
+    </div>
     <div className="report-section project-list-section">
       <div className="table-wrap">
         <table className="project-list-table">
-          <thead><tr><th>PROJECT</th><th>DESCRIPTION</th><th>PROJECT MANAGER</th><th>REPORTS</th><th>STATUS</th><th><span className="sr-only">Actions</span></th></tr></thead>
+          <thead><tr><th><span className="sr-only">Select project</span></th><th>PROJECT</th><th>DESCRIPTION</th><th>PROJECT MANAGER</th><th>REPORTS</th><th>STATUS</th><th><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
             {projectList.map((project) => {
               const count = Number(project.reportCount ?? reports.filter((report) => report.projectId === project.id).length);
@@ -2536,6 +2641,7 @@ function ProjectsPage({ projects: projectList, reports, onSelect, onCreate, onEd
                 tabIndex={0}
                 aria-label={`Open ${project.name} reports`}
                 onClick={openProject}
+                onDoubleClick={() => setSelectedProjectIds((current) => current.filter((id) => id !== String(project.id)))}
                 onKeyDown={(event) => {
                   if (event.target !== event.currentTarget) return;
                   if (event.key === "Enter" || event.key === " ") {
@@ -2544,6 +2650,25 @@ function ProjectsPage({ projects: projectList, reports, onSelect, onCreate, onEd
                   }
                 }}
               >
+                <td><input
+                  type="checkbox"
+                  className="project-selection-checkbox"
+                  aria-label={`Select ${project.name}`}
+                  checked={selectedProjectIds.includes(String(project.id))}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) => {
+                    const projectId = String(project.id);
+                    const selected = event.target.checked;
+                    setSelectedProjectIds((current) => selected
+                      ? [...new Set([...current, projectId])]
+                      : current.filter((id) => id !== projectId));
+                  }}
+                  onDoubleClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setSelectedProjectIds((current) => current.filter((id) => id !== String(project.id)));
+                  }}
+                /></td>
                 <td><button type="button" className="project-list-name" onClick={(event) => { event.stopPropagation(); openProject(); }}>
                   <span className={`project-list-icon card-${project.color}`}><FolderKanban size={16} /></span>
                   {project.name}
@@ -2561,7 +2686,7 @@ function ProjectsPage({ projects: projectList, reports, onSelect, onCreate, onEd
                 </div></td>
               </tr>;
             })}
-            {projectList.length === 0 && <tr><td className="empty-state" colSpan="6"><span className="empty-icon"><FolderKanban size={20} /></span><strong>No projects yet</strong><span>Create a project to start organizing reports.</span>{canCreate && <button type="button" className="button button-secondary" onClick={onCreate}><Plus size={16} /> New project</button>}</td></tr>}
+            {projectList.length === 0 && <tr><td className="empty-state" colSpan="7"><span className="empty-icon"><FolderKanban size={20} /></span><strong>No projects yet</strong><span>Create a project to start organizing reports.</span>{canCreate && <button type="button" className="button button-secondary" onClick={onCreate}><Plus size={16} /> New project</button>}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -2616,6 +2741,35 @@ function ManpowerPage({
   const selectedIds = new Set(selectedPunchIds);
   const allVisibleSelected = people.length > 0 && people.every((person) => selectedIds.has(person.punchId));
 
+  useEffect(() => {
+    const handleSelectAllManpower = (event) => {
+      const selectAllShortcut = (event.ctrlKey || event.metaKey)
+        && !event.altKey
+        && !event.shiftKey
+        && event.key.toLowerCase() === "a";
+      const clearShortcut = event.key === "Escape"
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.altKey
+        && !event.shiftKey;
+      if (!selectAllShortcut && !clearShortcut) return;
+      if (!canSelectAccounts || document.querySelector('[role="dialog"]') || (selectAllShortcut && people.length === 0)) return;
+      const target = event.target;
+      if (target instanceof HTMLElement
+        && (target.isContentEditable || target.closest('input:not([type="checkbox"]):not([type="radio"]), textarea, select, [role="textbox"]'))) {
+        return;
+      }
+
+      event.preventDefault();
+      if (clearShortcut) onClearSelection();
+      else if (allVisibleSelected) onToggleVisibleSelection(people, false);
+      else onToggleVisibleSelection(people, true);
+    };
+
+    window.addEventListener("keydown", handleSelectAllManpower);
+    return () => window.removeEventListener("keydown", handleSelectAllManpower);
+  }, [allVisibleSelected, canSelectAccounts, onClearSelection, onToggleVisibleSelection, people]);
+
   return <section className="manpower-page">
     <div className="page-heading">
       <div>
@@ -2638,7 +2792,18 @@ function ManpowerPage({
       </div>
       {canSelectAccounts && <div className="manpower-selection-toolbar">
         <span><strong>{selectedPunchIds.length}</strong> account{selectedPunchIds.length === 1 ? "" : "s"} selected</span>
-        <button type="button" className="button button-secondary" disabled={!people.length || isDeletingSelection || isBulkTransferring} onClick={() => onToggleVisibleSelection(people, !allVisibleSelected)}>
+        <span className="selection-shortcut-hint">Ctrl+A / ⌘A selects visible · press again or Esc to clear</span>
+        <button
+          type="button"
+          className="button button-secondary"
+          title="Double-click to deselect all visible accounts"
+          disabled={!people.length || isDeletingSelection || isBulkTransferring}
+          onClick={() => onToggleVisibleSelection(people, !allVisibleSelected)}
+          onDoubleClick={(event) => {
+            event.preventDefault();
+            onToggleVisibleSelection(people, false);
+          }}
+        >
           {allVisibleSelected ? "Deselect visible" : "Select visible"}
         </button>
         <button type="button" className="button button-secondary" disabled={!selectedPunchIds.length || isDeletingSelection || isBulkTransferring} onClick={onClearSelection}>Clear selection</button>
@@ -2653,7 +2818,14 @@ function ManpowerPage({
         <table className="manpower-table">
           <thead><tr>{canSelectAccounts && <th><span className="sr-only">Select account</span></th>}<th>PUNCH ID</th><th>EMPLOYEE NAME</th><th>DESIGNATION</th><th>ROLE</th><th>PROJECT</th><th>PROJECT MANAGER</th>{canManagePasswords && <th>PASSWORD</th>}<th>ACCOUNT</th><th><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
-            {people.map((person) => <tr key={person.punchId}>
+            {people.map((person) => <tr
+              key={person.punchId}
+              onDoubleClick={(event) => {
+                const target = event.target;
+                if (target instanceof Element && target.closest("button, input, select, textarea, a")) return;
+                onToggleSelection(person.punchId, false);
+              }}
+            >
               {canSelectAccounts && <td><input
                 type="checkbox"
                 className="manpower-selection-checkbox"
@@ -2661,6 +2833,10 @@ function ManpowerPage({
                 checked={selectedIds.has(person.punchId)}
                 disabled={isDeletingSelection || isBulkTransferring}
                 onChange={(event) => onToggleSelection(person.punchId, event.target.checked)}
+                onDoubleClick={(event) => {
+                  event.preventDefault();
+                  onToggleSelection(person.punchId, false);
+                }}
               /></td>}
               <td><div className="manpower-punch-id-cell">
                 <span className="punch-id">{person.punchId}</span>

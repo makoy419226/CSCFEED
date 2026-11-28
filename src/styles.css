@@ -268,8 +268,9 @@ tbody tr:hover:not(:has(.empty-state)) { background: #fbfcfe; }
 .integration-note button { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; margin-left: auto; border: 0; color: var(--brand-action); background: transparent; font-size: 10px; font-weight: 600; }
 .projects-page { width: 100%; min-width: 0; }
 .projects-page .page-heading { margin-bottom: 20px; }
-.project-list-table { min-width: 900px; }
+.project-list-table { min-width: 940px; }
 .project-list-table td { height: 58px; }
+.project-selection-checkbox { width: 15px; height: 15px; margin: 0; accent-color: var(--brand-action); }
 .project-list-row { cursor: pointer; transition: background .15s; }
 .project-list-row:hover { background: #f5f9fb; }
 .project-list-row:focus-visible { outline: 3px solid #0092cb66; outline-offset: -3px; }
@@ -286,6 +287,7 @@ tbody tr:hover:not(:has(.empty-state)) { background: #fbfcfe; }
 .manpower-search { width: min(460px, 100%); }
 .manpower-selection-toolbar { display: flex; min-height: 46px; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 19px 12px; color: #78859a; font-size: 10px; }
 .manpower-selection-toolbar > span { margin-right: auto; }
+.manpower-selection-toolbar > .selection-shortcut-hint { margin-right: 0; color: #8a96a7; font-size: 9px; white-space: nowrap; }
 .manpower-selection-toolbar > span strong { color: #354258; }
 .manpower-selection-toolbar .button { min-height: 32px; gap: 5px; padding: 0 9px; font-size: 10px; }
 .manpower-selection-checkbox { width: 15px; height: 15px; margin: 0; accent-color: var(--brand-action); }
