@@ -8,7 +8,7 @@ A responsive frontend skeleton for sharing reports across multiple projects. The
 npm install
 ```
 
-**Quick start on Windows:** run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-local.ps1`. If PostgreSQL is not installed it runs the first-time setup below.
+**Quick start on Windows:** run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-local.ps1`. If PostgreSQL is not installed it runs the first-time setup below. In VS Code, opening the project also starts `npm run dev` in a terminal; remote VS Code workspaces auto-forward port `5173`.
 
 **Quick start on macOS:** install Node.js/npm and PostgreSQL, make sure PostgreSQL is running, then run `./scripts/start-local.sh` (or `sh scripts/start-local.sh`). No PowerShell installation is needed.
 
