@@ -13,6 +13,7 @@ import {
   setSessionCookie,
 } from "../session-cookie.js";
 import { validate } from "../validation.js";
+import { encryptPassword } from "../password-vault.js";
 import { adminProfileUpdateSchema, loginSchema, ownPasswordUpdateSchema } from "../schemas.js";
 
 const loginLimiter = rateLimit({
@@ -94,7 +95,7 @@ export function createAuthRouter({ db, ready, startupError = () => null }) {
       if (!record || !["employee", "admin", "project_manager"].includes(record.role)) {
         throw new HttpError(401, "No active employee account matches that Punch ID.");
       }
-      const passwordApplies = ["employee", "project_manager"].includes(record.role);
+      const passwordApplies = ["employee", "project_manager", "admin"].includes(record.role);
       if (passwordApplies && record.passwordHash) {
         if (!credentials.password || !(await bcrypt.compare(credentials.password, record.passwordHash))) {
           throw new HttpError(401, "Invalid Punch ID or password.");
@@ -167,11 +168,12 @@ export function createAuthRouter({ db, ready, startupError = () => null }) {
       }
 
       const passwordHash = await bcrypt.hash(newPassword, 12);
+      const passwordCiphertext = encryptPassword(newPassword);
       await tx.insert(authCredentials)
-        .values({ accountId: account.id, username: account.punchId, passwordHash })
+        .values({ accountId: account.id, username: account.punchId, passwordHash, passwordCiphertext })
         .onConflictDoUpdate({
           target: authCredentials.accountId,
-          set: { username: account.punchId, passwordHash },
+          set: { username: account.punchId, passwordHash, passwordCiphertext },
         });
       await tx.delete(authSessions).where(and(
         eq(authSessions.accountId, account.id),

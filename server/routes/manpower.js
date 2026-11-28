@@ -18,6 +18,7 @@ import {
   punchIdParamsSchema,
 } from "../schemas.js";
 import { validate } from "../validation.js";
+import { decryptPassword, encryptPassword } from "../password-vault.js";
 
 const assignedProjects = alias(projects, "assigned_projects");
 const managerProjects = alias(projects, "manager_projects");
@@ -35,8 +36,11 @@ function toPerson(account) {
     designation: account.designation,
     active: account.active,
     adminAccess: account.accountRole === "admin",
-    isProjectManager: account.accountRole === "project_manager",
+    isProjectManager: account.accountRole === "project_manager"
+      || (account.accountRole === "admin" && account.adminBaseRole === "project_manager"),
+    adminBaseRole: account.adminBaseRole || null,
     passwordSet: Boolean(account.passwordSet),
+    passwordViewable: Boolean(account.passwordViewable),
     projectId: account.projectId ? String(account.projectId) : null,
     projectName: account.projectName || null,
     projectManagerProjects: (account.projectManagerProjects || []).map((project) => ({
@@ -58,7 +62,9 @@ export function createManpowerRouter({ db }) {
       designation: accounts.designation,
       active: accounts.active,
       accountRole: accounts.accountRole,
+      adminBaseRole: accounts.adminBaseRole,
       passwordSet: sql`${authCredentials.passwordHash} IS NOT NULL`,
+      passwordViewable: sql`${authCredentials.passwordCiphertext} IS NOT NULL`,
       projectId: accounts.projectId,
       projectName: assignedProjects.name,
     })
@@ -108,6 +114,21 @@ export function createManpowerRouter({ db }) {
     return res.json({ success: true, data: rows });
   }));
 
+  router.get("/:punchId/password", passwordManagementLimiter, validate(punchIdParamsSchema, "params"), asyncRoute(async (req, res) => {
+    const [credential] = await db.select({
+      passwordCiphertext: authCredentials.passwordCiphertext,
+    })
+      .from(accounts)
+      .leftJoin(authCredentials, eq(authCredentials.accountId, accounts.id))
+      .where(and(eq(accounts.punchId, req.validated.params.punchId), ne(accounts.punchId, "0000")))
+      .limit(1);
+    if (!credential) throw new HttpError(404, "Manpower account not found.");
+    if (!credential.passwordCiphertext) {
+      throw new HttpError(404, "This password cannot be viewed. Reset it to enable password viewing.");
+    }
+    return res.json({ success: true, data: { password: decryptPassword(credential.passwordCiphertext) } });
+  }));
+
   router.patch("/:punchId/password", requireSuperUser, passwordManagementLimiter, validate(punchIdParamsSchema, "params"), validate(manpowerPasswordSchema), asyncRoute(async (req, res) => {
     const result = await db.transaction(async (tx) => {
       const [target] = await tx.select({
@@ -119,16 +140,17 @@ export function createManpowerRouter({ db }) {
         .where(eq(accounts.punchId, req.validated.params.punchId))
         .for("update");
 
-      if (!target || !["employee", "project_manager"].includes(target.accountRole)) {
-        throw new HttpError(404, "Employee or Project Manager account not found.");
+      if (!target || !["employee", "project_manager", "admin"].includes(target.accountRole)) {
+        throw new HttpError(404, "Manpower account not found.");
       }
 
       const passwordHash = await bcrypt.hash(req.validated.body.newPassword, 12);
+      const passwordCiphertext = encryptPassword(req.validated.body.newPassword);
       await tx.insert(authCredentials)
-        .values({ accountId: target.id, username: target.punchId, passwordHash })
+        .values({ accountId: target.id, username: target.punchId, passwordHash, passwordCiphertext })
         .onConflictDoUpdate({
           target: authCredentials.accountId,
-          set: { username: target.punchId, passwordHash },
+          set: { username: target.punchId, passwordHash, passwordCiphertext },
         });
       await tx.delete(authSessions).where(eq(authSessions.accountId, target.id));
       return { punchId: target.punchId };
@@ -137,7 +159,29 @@ export function createManpowerRouter({ db }) {
     return res.json({ success: true, data: { ...result, passwordSet: true } });
   }));
 
-  router.patch("/:punchId/project", requireSuperUser, validate(punchIdParamsSchema, "params"), validate(projectMembershipSchema), asyncRoute(async (req, res) => {
+  router.delete("/:punchId/password", requireSuperUser, validate(punchIdParamsSchema, "params"), asyncRoute(async (req, res) => {
+    const result = await db.transaction(async (tx) => {
+      const [target] = await tx.select({
+        id: accounts.id,
+        punchId: accounts.punchId,
+        accountRole: accounts.accountRole,
+      })
+        .from(accounts)
+        .where(eq(accounts.punchId, req.validated.params.punchId))
+        .for("update");
+
+      if (!target || target.punchId === "0000" || target.accountRole !== "admin") {
+        throw new HttpError(404, "Appointed Admin account not found.");
+      }
+      await tx.delete(authSessions).where(eq(authSessions.accountId, target.id));
+      await tx.delete(authCredentials).where(eq(authCredentials.accountId, target.id));
+      return { punchId: target.punchId };
+    });
+
+    return res.json({ success: true, data: { ...result, passwordSet: false } });
+  }));
+
+  router.patch("/:punchId/project", requireAdmin, validate(punchIdParamsSchema, "params"), validate(projectMembershipSchema), asyncRoute(async (req, res) => {
     const result = await db.transaction(async (tx) => {
       const [target] = await tx.select({
         id: accounts.id,
@@ -223,7 +267,7 @@ export function createManpowerRouter({ db }) {
     return res.json({ success: true, data: result });
   }));
 
-  router.patch("/:punchId/project-manager", requireSuperUser, validate(punchIdParamsSchema, "params"), validate(projectManagerAssignmentSchema), asyncRoute(async (req, res) => {
+  router.patch("/:punchId/project-manager", requireAdmin, validate(punchIdParamsSchema, "params"), validate(projectManagerAssignmentSchema), asyncRoute(async (req, res) => {
     try {
       const result = await db.transaction(async (tx) => {
         const [target] = await tx.select({
@@ -232,6 +276,7 @@ export function createManpowerRouter({ db }) {
           fullName: accounts.fullName,
           designation: accounts.designation,
           accountRole: accounts.accountRole,
+          adminBaseRole: accounts.adminBaseRole,
           active: accounts.active,
         })
           .from(accounts)
@@ -241,7 +286,8 @@ export function createManpowerRouter({ db }) {
         if (!target || target.punchId === "0000" || target.accountRole === superUserRole) {
           throw new HttpError(404, "Employee account not found.");
         }
-        if (!target.active || target.accountRole !== "project_manager") {
+        if (!target.active || !(target.accountRole === "project_manager"
+          || (target.accountRole === "admin" && target.adminBaseRole === "project_manager"))) {
           throw new HttpError(409, "Only active appointed Project Managers can be assigned to projects.");
         }
 
@@ -292,7 +338,7 @@ export function createManpowerRouter({ db }) {
     }
   }));
 
-  router.put("/:punchId/project-manager-assignments", requireSuperUser, validate(punchIdParamsSchema, "params"), validate(projectManagerAssignmentsSchema), asyncRoute(async (req, res) => {
+  router.put("/:punchId/project-manager-assignments", requireAdmin, validate(punchIdParamsSchema, "params"), validate(projectManagerAssignmentsSchema), asyncRoute(async (req, res) => {
     const projectIds = req.validated.body.projectIds;
     const projectIdSet = new Set(projectIds);
     const result = await db.transaction(async (tx) => {
@@ -302,13 +348,15 @@ export function createManpowerRouter({ db }) {
         fullName: accounts.fullName,
         designation: accounts.designation,
         accountRole: accounts.accountRole,
+        adminBaseRole: accounts.adminBaseRole,
         active: accounts.active,
       })
         .from(accounts)
         .where(eq(accounts.punchId, req.validated.params.punchId))
         .for("update");
 
-      if (!target || target.punchId === "0000" || target.accountRole !== "project_manager") {
+      if (!target || target.punchId === "0000" || !(target.accountRole === "project_manager"
+        || (target.accountRole === "admin" && target.adminBaseRole === "project_manager"))) {
         throw new HttpError(404, "Project Manager account not found.");
       }
       if (!target.active) {
@@ -405,12 +453,16 @@ export function createManpowerRouter({ db }) {
     return res.json({ success: true, data: result });
   }));
 
-  router.post("/", validate(manpowerSchema), asyncRoute(async (req, res) => {
+  router.post("/", requireSuperUser, validate(manpowerSchema), asyncRoute(async (req, res) => {
+    if (req.validated.body.adminAccess && req.identity.role !== superUserRole) {
+      throw new HttpError(403, "Only the Super User can grant administrator access.");
+    }
     const [account] = await db.transaction(async (tx) => tx.insert(accounts).values({
       punchId: req.validated.body.punchId,
       fullName: req.validated.body.name,
       designation: req.validated.body.designation,
-      accountRole: "employee",
+      accountRole: req.validated.body.adminAccess ? "admin" : "employee",
+      adminBaseRole: req.validated.body.adminAccess ? "employee" : null,
       active: true,
     }).returning());
     return res.status(201).json({ success: true, data: toPerson(account) });
@@ -424,6 +476,7 @@ export function createManpowerRouter({ db }) {
       id: accounts.id,
       punchId: accounts.punchId,
       accountRole: accounts.accountRole,
+      adminBaseRole: accounts.adminBaseRole,
       active: accounts.active,
     })
       .from(accounts)
@@ -437,25 +490,50 @@ export function createManpowerRouter({ db }) {
     if (req.validated.body.adminAccess && !target.active) {
       throw new HttpError(409, "Activate this account before granting admin access.");
     }
-    if (!["employee", "admin"].includes(target.accountRole)) {
+    if (!["employee", "project_manager", "admin"].includes(target.accountRole)) {
       throw new HttpError(409, "This account cannot be assigned admin access.");
     }
 
-    const [account] = await db.update(accounts)
-      .set({ accountRole: req.validated.body.adminAccess ? "admin" : "employee" })
-      .where(and(
-        eq(accounts.id, target.id),
-        inArray(accounts.accountRole, ["employee", "admin"]),
-        ne(accounts.punchId, "0000"),
-        ...(req.validated.body.adminAccess ? [eq(accounts.active, true)] : []),
-      ))
-      .returning();
+    if (req.validated.body.adminAccess && target.accountRole === "admin") {
+      return res.json({ success: true, data: toPerson(target) });
+    }
+    if (!req.validated.body.adminAccess && target.accountRole !== "admin") {
+      throw new HttpError(409, "This account does not currently have admin access.");
+    }
+
+    const account = await db.transaction(async (tx) => {
+      const nextRole = req.validated.body.adminAccess ? "admin" : target.adminBaseRole || "employee";
+      const [updated] = await tx.update(accounts)
+        .set({
+          accountRole: nextRole,
+          adminBaseRole: req.validated.body.adminAccess ? target.accountRole : null,
+        })
+        .where(and(
+          eq(accounts.id, target.id),
+          eq(accounts.accountRole, target.accountRole),
+          ne(accounts.punchId, "0000"),
+          ...(req.validated.body.adminAccess ? [eq(accounts.active, true)] : []),
+        ))
+        .returning();
+      if (!updated) return null;
+      await tx.delete(authSessions).where(eq(authSessions.accountId, updated.id));
+      const [assignedProject] = updated.projectId
+        ? await tx.select({ projectName: projects.name }).from(projects).where(eq(projects.id, updated.projectId))
+        : [];
+      const projectManagerProjects = nextRole === "project_manager"
+        ? await tx.select({ id: projects.id, name: projects.name })
+          .from(projects)
+          .where(eq(projects.managerId, updated.id))
+          .orderBy(projects.name)
+        : [];
+      return toPerson({ ...updated, ...assignedProject, projectManagerProjects });
+    });
 
     if (!account) throw new HttpError(409, "This account changed while the request was being processed.");
-    return res.json({ success: true, data: toPerson(account) });
+    return res.json({ success: true, data: account });
   }));
 
-  router.patch("/:punchId/project-manager-access", requireSuperUser, validate(punchIdParamsSchema, "params"), validate(manpowerProjectManagerAccessSchema), asyncRoute(async (req, res) => {
+  router.patch("/:punchId/project-manager-access", requireAdmin, validate(punchIdParamsSchema, "params"), validate(manpowerProjectManagerAccessSchema), asyncRoute(async (req, res) => {
     const punchId = req.validated.params.punchId;
     if (punchId === "0000") throw new HttpError(403, "The Super User account cannot be changed.");
 
@@ -490,7 +568,7 @@ export function createManpowerRouter({ db }) {
     return res.json({ success: true, data: toPerson(account) });
   }));
 
-  router.put("/:punchId", validate(punchIdParamsSchema, "params"), validate(manpowerSchema), asyncRoute(async (req, res) => {
+  router.put("/:punchId", requireSuperUser, validate(punchIdParamsSchema, "params"), validate(manpowerSchema), asyncRoute(async (req, res) => {
     const [account] = await db.transaction(async (tx) => tx.update(accounts)
       .set({
         punchId: req.validated.body.punchId,
@@ -499,7 +577,7 @@ export function createManpowerRouter({ db }) {
       })
       .where(and(
         eq(accounts.punchId, req.validated.params.punchId),
-        inArray(accounts.accountRole, ["employee", "project_manager"]),
+        inArray(accounts.accountRole, ["employee", "project_manager", "admin"]),
       ))
       .returning());
 
@@ -524,7 +602,7 @@ export function createManpowerRouter({ db }) {
     });
   }));
 
-  router.patch("/:punchId/active", validate(punchIdParamsSchema, "params"), validate(manpowerActiveSchema), asyncRoute(async (req, res) => {
+  router.patch("/:punchId/active", requireSuperUser, validate(punchIdParamsSchema, "params"), validate(manpowerActiveSchema), asyncRoute(async (req, res) => {
     const account = await db.transaction(async (tx) => {
       const [target] = await tx.select({
         id: accounts.id,
@@ -535,9 +613,9 @@ export function createManpowerRouter({ db }) {
         .where(eq(accounts.punchId, req.validated.params.punchId))
         .for("update");
 
-      if (!target || !["employee", "project_manager"].includes(target.accountRole)) return null;
-      if (target.accountRole === "project_manager" && req.identity.role !== superUserRole) {
-        throw new HttpError(403, "Only the Super User can change a Project Manager's account status.");
+      if (!target || !["employee", "project_manager", "admin"].includes(target.accountRole)) return null;
+      if (target.punchId === req.identity.punchId) {
+        throw new HttpError(409, "You cannot deactivate your own account.");
       }
 
       const [updated] = await tx.update(accounts)

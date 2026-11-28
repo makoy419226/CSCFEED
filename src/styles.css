@@ -293,6 +293,8 @@ tbody tr:hover:not(:has(.empty-state)) { background: #fbfcfe; }
 .manpower-table { min-width: 1180px; }
 .manpower-table td { height: 52px; }
 .manpower-table .report-actions > * { flex: 0 0 auto; }
+.manpower-admin-toggle { display: flex; align-items: center; gap: 7px; color: #53637b; font-size: 11px; }
+.manpower-admin-toggle input { width: 15px; height: 15px; accent-color: var(--brand-action); }
 .manpower-transfer-button { min-height: 29px; gap: 4px; padding: 0 7px; font-size: 9px; white-space: nowrap; }
 .project-manager-badge { display: inline-block; overflow: hidden; max-width: 190px; padding: 4px 8px; border: 1px solid var(--brand-blue-border); border-radius: 5px; color: var(--brand-action); background: var(--brand-blue-soft); font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 .project-manager-assignment-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }

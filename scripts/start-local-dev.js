@@ -299,6 +299,27 @@ async function saveDatabaseUrls(databaseUrl, migrationUrl) {
   });
 }
 
+async function ensureLocalPasswordEncryptionKey() {
+  if (/^[\da-f]{64}$/i.test(process.env.PASSWORD_ENCRYPTION_KEY || "")) return;
+  const key = randomBytes(32).toString("hex");
+  let contents = "";
+  try {
+    contents = await readFile(envPath, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const newline = contents.includes("\r\n") ? "\r\n" : "\n";
+  const lines = contents ? contents.split(/\r?\n/) : [];
+  if (lines[lines.length - 1] === "") lines.pop();
+  const index = lines.findIndex((line) => /^\s*PASSWORD_ENCRYPTION_KEY\s*=/.test(line));
+  const setting = `PASSWORD_ENCRYPTION_KEY=${key}`;
+  if (index >= 0) lines[index] = setting;
+  else lines.push(setting);
+  await writeFile(envPath, `${lines.join(newline)}${newline}`, { encoding: "utf8", mode: 0o600 });
+  process.env.PASSWORD_ENCRYPTION_KEY = key;
+  console.info("Generated a password encryption key and saved it to the Git-ignored .env.");
+}
+
 async function rotateLocalRolePasswords(admin, migrationUrl, databaseUrl) {
   const roles = [
     { name: "cscfeed_owner", url: migrationUrl, password: randomBytes(32).toString("hex") },
@@ -464,6 +485,8 @@ async function main() {
     return;
   }
 
+  await ensureLocalPasswordEncryptionKey();
+
   await startPostgresServiceIfStopped();
   await assertDevelopmentPortsAvailable();
 
@@ -490,6 +513,8 @@ async function main() {
       "004_project_managers.sql",
       "005_project_manager_appointments.sql",
       "006_manpower_transfer_log.sql",
+      "007_delegated_admin_access.sql",
+      "008_recoverable_password_view.sql",
     ].map((fileName) => readFile(path.join(root, "database", "migrations", fileName), "utf8")));
     await migrationClient.query("BEGIN");
     try {

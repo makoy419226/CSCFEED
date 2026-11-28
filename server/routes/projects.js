@@ -61,7 +61,7 @@ export function createProjectsRouter({ db, ready }) {
     return res.status(201).json({ success: true, data: toProject(project) });
   }));
 
-  router.put("/:id", requireAdmin, validate(idParamsSchema, "params"), validate(projectSchema), asyncRoute(async (req, res) => {
+  router.put("/:id", requireSuperUser, validate(idParamsSchema, "params"), validate(projectSchema), asyncRoute(async (req, res) => {
     const [project] = await db.transaction(async (tx) => tx.update(projects)
       .set(req.validated.body)
       .where(eq(projects.id, req.validated.params.id))
@@ -71,7 +71,7 @@ export function createProjectsRouter({ db, ready }) {
     return res.json({ success: true, data: toProject(project) });
   }));
 
-  router.patch("/:id/manager", requireSuperUser, validate(idParamsSchema, "params"), validate(projectManagerAppointmentSchema), asyncRoute(async (req, res) => {
+  router.patch("/:id/manager", requireAdmin, validate(idParamsSchema, "params"), validate(projectManagerAppointmentSchema), asyncRoute(async (req, res) => {
     const projectId = req.validated.params.id;
     const { punchId } = req.validated.body;
     try {
@@ -100,6 +100,7 @@ export function createProjectsRouter({ db, ready }) {
           punchId: accounts.punchId,
           fullName: accounts.fullName,
           accountRole: accounts.accountRole,
+          adminBaseRole: accounts.adminBaseRole,
           active: accounts.active,
         })
           .from(accounts)
@@ -108,7 +109,8 @@ export function createProjectsRouter({ db, ready }) {
         if (!manager || manager.punchId === "0000" || manager.accountRole === superUserRole) {
           throw new HttpError(404, "Employee account not found.");
         }
-        if (!manager.active || manager.accountRole !== "project_manager") {
+        if (!manager.active || !(manager.accountRole === "project_manager"
+          || (manager.accountRole === "admin" && manager.adminBaseRole === "project_manager"))) {
           throw new HttpError(409, "Only active appointed Project Managers can manage a project.");
         }
         if (Number(project.managerId) !== Number(manager.id)) {
@@ -132,7 +134,7 @@ export function createProjectsRouter({ db, ready }) {
     }
   }));
 
-  router.delete("/:id", requireAdmin, validate(idParamsSchema, "params"), asyncRoute(async (req, res) => {
+  router.delete("/:id", requireSuperUser, validate(idParamsSchema, "params"), asyncRoute(async (req, res) => {
     let deleted;
     try {
       [deleted] = await db.delete(projects)

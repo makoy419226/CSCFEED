@@ -19,6 +19,7 @@ import { accounts, projects, reportFiles, reports } from "../../src/db/schema.js
 import { asyncRoute, HttpError } from "../errors.js";
 import {
   canManageProjectReports,
+  canEditProjectReports,
   hasAdminAccess,
   hasProjectManagerAccess,
   requireAdmin,
@@ -547,6 +548,9 @@ export function createReportsRouter({ db, maxUploadBytes }) {
   }));
 
   router.post("/", reportUpload.fields([{ name: "files" }, { name: "file" }]), asyncRoute(async (req, res) => {
+    if (req.identity.role === "admin") {
+      throw new HttpError(403, "Appointed Admins can view reports but cannot upload or edit them.");
+    }
     const uploads = [
       ...(req.files?.files || []),
       ...(req.files?.file || []),
@@ -737,7 +741,7 @@ export function createReportsRouter({ db, maxUploadBytes }) {
         if (!current.projectActive || current.archivedAt) {
           throw new HttpError(409, "Archived or inactive-project reports cannot be edited.");
         }
-        if (!canManageProjectReports(req.identity, current.projectId)) {
+        if (!canEditProjectReports(req.identity, current.projectId)) {
           throw new HttpError(403, "You can only edit reports in your assigned projects.");
         }
 

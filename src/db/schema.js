@@ -19,6 +19,7 @@ export const accounts = cscfeed.table("accounts", {
   fullName: text("full_name").notNull(),
   designation: text("designation").notNull().default(""),
   accountRole: text("account_role").notNull().default("employee"),
+  adminBaseRole: text("admin_base_role"),
   active: boolean("active").notNull().default(true),
   projectId: bigint("project_id", { mode: "number" }).references(() => projects.id, { onDelete: "set null" }),
   externalSubject: text("external_subject"),

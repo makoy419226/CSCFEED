@@ -12,6 +12,7 @@ export const authCredentials = cscfeed.table("auth_credentials", {
   accountId: bigint("account_id", { mode: "number" }).primaryKey(),
   username: text("username").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
+  passwordCiphertext: text("password_ciphertext"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

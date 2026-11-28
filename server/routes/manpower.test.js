@@ -3,6 +3,7 @@ import express from "express";
 import test from "node:test";
 import { accounts, projects } from "../../src/db/schema.js";
 import { handleError } from "../errors.js";
+import { encryptPassword } from "../password-vault.js";
 import { createManpowerRouter } from "./manpower.js";
 
 function createDb(role, target = null) {
@@ -268,6 +269,67 @@ function createManpowerActiveDb({ target, role }) {
   };
 }
 
+function createPasswordDb(role, passwordCiphertext = null) {
+  let selectCalls = 0;
+  const writes = [];
+  const identity = {
+    id: role === "super_admin" ? 1 : 2,
+    name: role === "super_admin" ? "Super User" : "Appointed Admin",
+    role,
+    punchId: role === "super_admin" ? "0000" : "1234",
+    username: role,
+  };
+  const db = {
+    writes,
+    select() {
+      const call = ++selectCalls;
+      return {
+        from() { return this; },
+        innerJoin() { return this; },
+        leftJoin() { return this; },
+        where() { return this; },
+        async limit() {
+          return call === 1 ? [identity] : [{ passwordCiphertext }];
+        },
+      };
+    },
+    async transaction(callback) {
+      const tx = {
+        select() {
+          return {
+            from() { return this; },
+            where() { return this; },
+            async for() {
+              return [{ id: 9, punchId: "2468", accountRole: "employee" }];
+            },
+          };
+        },
+        insert(table) {
+          return {
+            values(values) {
+              writes.push({ table, values });
+              return {
+                onConflictDoUpdate({ set }) {
+                  writes.push({ table, set });
+                },
+              };
+            },
+          };
+        },
+        delete(table) {
+          return {
+            where() {
+              writes.push({ table, deleted: true });
+            },
+          };
+        },
+      };
+      return callback(tx);
+    },
+  };
+  return db;
+}
+
 async function withManpowerApp(db, run) {
   const app = express();
   app.use(express.json());
@@ -278,14 +340,17 @@ async function withManpowerApp(db, run) {
 
   try {
     const { port } = server.address();
-    await run((url, body, method = "PATCH") => fetch(`http://127.0.0.1:${port}/api/manpower${url}`, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        cookie: "cscfeed_session=test-session",
-      },
-      body: JSON.stringify(body),
-    }));
+    await run((url, body, method = "PATCH") => {
+      const options = {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          cookie: "cscfeed_session=test-session",
+        },
+      };
+      if (method !== "GET" && method !== "HEAD") options.body = JSON.stringify(body);
+      return fetch(`http://127.0.0.1:${port}/api/manpower${url}`, options);
+    });
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
@@ -302,6 +367,65 @@ const employeeAccount = {
   active: true,
 };
 const activeProjectManager = { ...employeeAccount, accountRole: "project_manager" };
+
+test("appointed admins can view set manpower passwords", async () => {
+  const originalKey = process.env.PASSWORD_ENCRYPTION_KEY;
+  process.env.PASSWORD_ENCRYPTION_KEY = "a".repeat(64);
+  try {
+    const passwordCiphertext = encryptPassword("employee-password");
+    for (const role of ["admin", "super_admin"]) {
+      const db = createPasswordDb(role, passwordCiphertext);
+
+      await withManpowerApp(db, async (request) => {
+        const response = await request("/2468/password", undefined, "GET");
+
+        assert.equal(response.status, 200);
+        assert.equal((await response.json()).data.password, "employee-password");
+      });
+    }
+  } finally {
+    if (originalKey === undefined) delete process.env.PASSWORD_ENCRYPTION_KEY;
+    else process.env.PASSWORD_ENCRYPTION_KEY = originalKey;
+  }
+});
+
+test("non-admins cannot view set manpower passwords", async () => {
+  const db = createPasswordDb("employee");
+
+  await withManpowerApp(db, async (request) => {
+    const response = await request("/2468/password", undefined, "GET");
+
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).message, "Administrator access is required.");
+  });
+});
+
+test("only the Super User can change manpower passwords", async () => {
+  const originalKey = process.env.PASSWORD_ENCRYPTION_KEY;
+  process.env.PASSWORD_ENCRYPTION_KEY = "b".repeat(64);
+  try {
+    const adminDb = createPasswordDb("admin");
+    await withManpowerApp(adminDb, async (request) => {
+      const response = await request("/2468/password", { newPassword: "a-secure-password" });
+
+      assert.equal(response.status, 403);
+      assert.equal((await response.json()).message, "Super User access is required.");
+    });
+    assert.equal(adminDb.writes.length, 0);
+
+    const superUserDb = createPasswordDb("super_admin");
+    await withManpowerApp(superUserDb, async (request) => {
+      const response = await request("/2468/password", { newPassword: "a-secure-password" });
+
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).data.passwordSet, true);
+    });
+    assert.equal(superUserDb.writes.length, 3);
+  } finally {
+    if (originalKey === undefined) delete process.env.PASSWORD_ENCRYPTION_KEY;
+    else process.env.PASSWORD_ENCRYPTION_KEY = originalKey;
+  }
+});
 
 test("only the Super User can grant admin access", async () => {
   const db = createDb("admin", employeeAccount);

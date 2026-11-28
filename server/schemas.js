@@ -57,6 +57,7 @@ export const manpowerSchema = z.object({
   punchId: employeePunchId,
   name: z.string().trim().min(2).max(160),
   designation: z.string().trim().min(1).max(120),
+  adminAccess: z.boolean().optional().default(false),
 });
 
 export const manpowerAdminAccessSchema = z.object({

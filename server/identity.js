@@ -19,6 +19,12 @@ export function canManageProjectReports(identity, projectId) {
       && identity.projectManagerProjectIds.includes(String(projectId)));
 }
 
+export function canEditProjectReports(identity, projectId) {
+  return identity?.role === superUserRole
+    || (hasProjectManagerAccess(identity)
+      && identity.projectManagerProjectIds.includes(String(projectId)));
+}
+
 export async function listProjectManagerProjectIds(db, accountId) {
   const rows = await db.select({ id: projects.id })
     .from(projects)
