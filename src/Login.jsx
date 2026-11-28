@@ -126,6 +126,7 @@ export default function Login({ onLogin, serviceMessage = "" }) {
 
         <form className="login-form" onSubmit={handleSubmit}>
           {isEmployee ? (
+            <>
             <label className="login-label" htmlFor="login-employee-id">
               Employee / Punch ID
               <span className="login-input-wrap">
@@ -175,6 +176,7 @@ export default function Login({ onLogin, serviceMessage = "" }) {
               </span>
               <small>Appointed Admin accounts continue to use Punch ID only.</small>
             </label>
+            </>
           ) : (
             <>
               <label className="login-label" htmlFor="login-admin-username">
