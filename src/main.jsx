@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { createPortal } from "react-dom";
 import {
   Archive,
   ArrowDownToLine,
@@ -13,6 +14,7 @@ import {
   ChevronDown,
   CircleHelp,
   Clock3,
+  Copy,
   File,
   FileText,
   Eye,
@@ -1148,6 +1150,18 @@ function Workspace({ user, onLogout, onUserUpdated }) {
     window.setTimeout(() => setNotice(""), 5000);
   };
 
+  const copyManpowerPunchId = async (punchId) => {
+    try {
+      await navigator.clipboard.writeText(punchId);
+      setNotice(`Punch ID ${punchId} copied to clipboard.`);
+    } catch (error) {
+      setNotice(error instanceof Error
+        ? `Unable to copy Punch ID: ${error.message}`
+        : "Unable to copy Punch ID.");
+    }
+    window.setTimeout(() => setNotice(""), 5000);
+  };
+
   const openEmployeeReportLog = async (person) => {
     if (!isAdministrator) return;
     setReportLogPerson(person);
@@ -1685,7 +1699,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
       <main className="main-content">
         <header className="topbar">
           <button className="mobile-menu" aria-label="Open menu" onClick={() => setMobileNavOpen(true)}><Menu size={21} /></button>
-          <div className="breadcrumbs"><span>Workspace</span><span className="crumb-slash">/</span><strong>{activePage}</strong></div>
+          <div className="breadcrumbs"><span className="breadcrumb-current" aria-current="page">{activePage}</span></div>
           <div className="topbar-actions">
             <span className="secure-label"><ShieldCheck size={15} /> Signed in</span>
             <button className="icon-button notification-button" aria-label="Notifications" onClick={() => setNotice("You’re all caught up.")}><Bell size={18} /><span className="notification-dot" /></button>
@@ -1746,6 +1760,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
               onBulkTransfer={openBulkProjectTransfer}
               onSetPassword={openPasswordDialog}
               onViewPassword={viewManpowerPassword}
+              onCopyPunchId={copyManpowerPunchId}
               onAdd={() => openManpowerForm()}
               onEdit={openManpowerForm}
               onToggleActive={toggleManpowerActive}
@@ -2587,6 +2602,7 @@ function ManpowerPage({
   onAdd,
   onEdit,
   onViewPassword,
+  onCopyPunchId,
   onToggleActive,
   onToggleProjectManagerAccess,
   onDeletePerson,
@@ -2595,6 +2611,7 @@ function ManpowerPage({
   onAssignProjectManager,
   onViewReports,
 }) {
+  const [projectManagerProjectsPerson, setProjectManagerProjectsPerson] = useState(null);
   const canSelectAccounts = canDeleteAccounts || canTransferProjects;
   const selectedIds = new Set(selectedPunchIds);
   const allVisibleSelected = people.length > 0 && people.every((person) => selectedIds.has(person.punchId));
@@ -2645,7 +2662,16 @@ function ManpowerPage({
                 disabled={isDeletingSelection || isBulkTransferring}
                 onChange={(event) => onToggleSelection(person.punchId, event.target.checked)}
               /></td>}
-              <td><span className="punch-id">{person.punchId}</span></td>
+              <td><div className="manpower-punch-id-cell">
+                <span className="punch-id">{person.punchId}</span>
+                <button
+                  type="button"
+                  className="copy-punch-id-button"
+                  aria-label={`Copy Punch ID ${person.punchId}`}
+                  title="Copy Punch ID"
+                  onClick={() => onCopyPunchId(person.punchId)}
+                ><Copy size={14} /></button>
+              </div></td>
               <td className="manpower-name">{person.name}</td>
               <td>{person.designation}</td>
               <td>{person.adminAccess
@@ -2660,16 +2686,16 @@ function ManpowerPage({
               </td>
               <td>
                 <div className="project-manager-assignment-cell">
-                  {person.projectManagerProjects?.length ? <details className="project-manager-project-dropdown">
-                    <summary>
+                  {person.projectManagerProjects?.length ? <button
+                    type="button"
+                    className="project-manager-project-trigger"
+                    aria-haspopup="dialog"
+                    aria-label={`View assigned projects for ${person.name}`}
+                    onClick={() => setProjectManagerProjectsPerson(person)}
+                  >
                       {person.projectManagerProjects.length} assigned project{person.projectManagerProjects.length === 1 ? "" : "s"}
                       <ChevronDown size={13} aria-hidden="true" />
-                    </summary>
-                    <div className="project-manager-project-options">
-                      {person.projectManagerProjects.map((project) => <span className="project-manager-badge" key={project.id}>{project.name}</span>)}
-                      {canAssignProjectManagers && person.isProjectManager && person.active && <button type="button" className="text-button project-manager-assign-button" aria-label={`Add project for ${person.name}`} onClick={() => onAssignProjectManager(person)}>Add project</button>}
-                    </div>
-                  </details> : canAssignProjectManagers && person.isProjectManager && person.active
+                  </button> : canAssignProjectManagers && person.isProjectManager && person.active
                     ? <button type="button" className="text-button project-manager-assign-button" aria-label={`Assign ${person.name}`} onClick={() => onAssignProjectManager(person)}>Assign</button>
                     : canAssignProjectManagers && person.active && !person.adminAccess
                       ? <button
@@ -2739,6 +2765,50 @@ function ManpowerPage({
         </tr>)}</tbody>
       </table></div> : <p className="empty-state">No project transfers recorded yet.</p>}
     </section>
+    {projectManagerProjectsPerson && createPortal(
+      <div
+        className="modal-backdrop assigned-projects-backdrop"
+        role="presentation"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setProjectManagerProjectsPerson(null);
+        }}
+      >
+        <section className="upload-modal assigned-projects-popover" role="dialog" aria-modal="true" aria-labelledby="assigned-projects-title">
+          <div className="modal-heading">
+            <div>
+              <span className="modal-icon"><FolderKanban size={19} /></span>
+              <div>
+                <h2 id="assigned-projects-title">Assigned projects</h2>
+                <p>{projectManagerProjectsPerson.name} · Punch ID {projectManagerProjectsPerson.punchId}</p>
+              </div>
+            </div>
+            <button type="button" className="icon-button" aria-label="Close assigned projects" onClick={() => setProjectManagerProjectsPerson(null)}><X size={19} /></button>
+          </div>
+          <div className="assigned-project-list">
+            {projectManagerProjectsPerson.projectManagerProjects.map((project) => <div className="assigned-project-item" key={project.id}>
+              <FolderKanban size={16} aria-hidden="true" />
+              <span>{project.name}</span>
+            </div>)}
+          </div>
+          <div className="modal-footer">
+            <span>{projectManagerProjectsPerson.projectManagerProjects.length} assigned project{projectManagerProjectsPerson.projectManagerProjects.length === 1 ? "" : "s"}</span>
+            <div>
+              {canAssignProjectManagers && projectManagerProjectsPerson.isProjectManager && projectManagerProjectsPerson.active && <button
+                type="button"
+                className="button button-secondary"
+                onClick={() => {
+                  const person = projectManagerProjectsPerson;
+                  setProjectManagerProjectsPerson(null);
+                  onAssignProjectManager(person);
+                }}
+              ><Plus size={15} /> Add project</button>}
+              <button type="button" className="button button-primary" onClick={() => setProjectManagerProjectsPerson(null)}>Close</button>
+            </div>
+          </div>
+        </section>
+      </div>,
+      document.body,
+    )}
   </section>;
 }
 

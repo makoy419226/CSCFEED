@@ -95,9 +95,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .user-more { display: grid; width: 28px; height: 28px; margin-left: auto; place-items: center; border: 0; border-radius: 6px; background: transparent; color: #7d899a; }
 .main-content { min-width: 0; min-height: 100vh; margin-left: var(--sidebar-width); overflow-x: clip; }
 .topbar { position: sticky; top: 0; z-index: 10; display: flex; height: 65px; align-items: center; justify-content: space-between; padding: 0 36px; border-bottom: 1px solid var(--border); background: #ffffffed; backdrop-filter: blur(12px); }
-.breadcrumbs { display: flex; align-items: center; gap: 10px; color: #8792a3; font-size: 12px; }
-.breadcrumbs strong { color: #3a4659; font-weight: 600; }
-.crumb-slash { color: #c4cbd5; }
+.breadcrumbs { display: flex; align-items: center; }
+.breadcrumb-current { display: inline-flex; min-height: 30px; align-items: center; padding: 0 11px; border-left: 3px solid var(--brand-blue); border-radius: 0 6px 6px 0; color: var(--brand-action); background: var(--brand-blue-soft); font-size: 12px; font-weight: 700; }
 .topbar-actions { display: flex; align-items: center; gap: 19px; }
 .secure-label { display: flex; align-items: center; gap: 6px; color: #728196; font-size: 11px; }
 .secure-label svg { color: #3ca47c; }
@@ -298,10 +297,13 @@ tbody tr:hover:not(:has(.empty-state)) { background: #fbfcfe; }
 .manpower-transfer-button { min-height: 29px; gap: 4px; padding: 0 7px; font-size: 9px; white-space: nowrap; }
 .project-manager-badge { display: inline-block; overflow: hidden; max-width: 190px; padding: 4px 8px; border: 1px solid var(--brand-blue-border); border-radius: 5px; color: var(--brand-action); background: var(--brand-blue-soft); font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 .project-manager-assignment-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.project-manager-project-dropdown > summary { display: inline-flex; min-height: 29px; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid var(--brand-blue-border); border-radius: 5px; color: var(--brand-action); background: var(--brand-blue-soft); font-size: 10px; font-weight: 600; list-style: none; white-space: nowrap; cursor: pointer; }
-.project-manager-project-dropdown > summary::-webkit-details-marker { display: none; }
-.project-manager-project-dropdown[open] > summary svg { transform: rotate(180deg); }
-.project-manager-project-options { display: flex; max-width: 320px; flex-wrap: wrap; align-items: center; gap: 4px; padding-top: 5px; }
+.project-manager-project-trigger { display: inline-flex; min-height: 29px; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid var(--brand-blue-border); border-radius: 5px; color: var(--brand-action); background: var(--brand-blue-soft); font-size: 10px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.project-manager-project-trigger:hover { border-color: var(--brand-blue); }
+.assigned-projects-backdrop { align-items: center; }
+.assigned-projects-popover { display: flex; width: min(100%, 520px); max-height: min(84vh, 560px); max-height: min(84dvh, 560px); flex-direction: column; overflow: hidden; }
+.assigned-project-list { display: grid; min-height: 0; gap: 8px; overflow-y: auto; padding: 2px 3px 4px; }
+.assigned-project-item { display: flex; min-height: 42px; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #e7ebf0; border-radius: 7px; color: #536176; background: #fff; font-size: 11px; }
+.assigned-project-item svg { flex: 0 0 auto; color: var(--brand-action); }
 .project-manager-assign-button { min-height: 28px; padding: 0 7px; border: 1px solid var(--brand-blue-border); border-radius: 5px; background: var(--brand-blue-soft); font-size: 10px; }
 .manager-project-selection { display: grid; gap: 8px; margin: 0; padding: 12px; border: 1px solid #e1e6ed; border-radius: 7px; }
 .manager-project-selection legend { padding: 0 4px; color: #536176; font-size: 11px; font-weight: 600; }
@@ -321,7 +323,10 @@ tbody tr:hover:not(:has(.empty-state)) { background: #fbfcfe; }
 .employee-report-log-empty svg { color: var(--brand-blue); }
 .employee-report-log-empty strong { color: #526077; font-size: 12px; }
 .employee-report-log-empty span { font-size: 11px; }
+.manpower-punch-id-cell { display: flex; align-items: center; gap: 4px; }
 .punch-id { display: inline-block; padding: 4px 7px; border: 1px solid var(--brand-blue-border); border-radius: 5px; color: var(--brand-action); background: var(--brand-blue-soft); font-size: 10px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.copy-punch-id-button { display: grid; width: 26px; height: 26px; flex: 0 0 auto; place-items: center; border: 1px solid transparent; border-radius: 6px; color: #78869a; background: transparent; }
+.copy-punch-id-button:hover { border-color: var(--brand-blue-border); color: var(--brand-action); background: var(--brand-blue-soft); }
 .manpower-name { color: #354258; font-weight: 600; }
 .directory-status { display: inline-flex; min-height: 28px; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid #e3eee8; border-radius: 20px; color: #718196; background: #f7fbf8; font-size: 10px; cursor: pointer; }
 .directory-status-static { cursor: default; }
@@ -534,7 +539,9 @@ button:hover .lucide-motion, .drop-zone:hover .lucide-motion { transform: transl
   .project-report-folder { gap: 8px; padding: 9px; }
   .project-report-folder-icon { width: 32px; height: 32px; }
   .modal-backdrop { align-items: end; padding: 0; }
+  .assigned-projects-backdrop { align-items: center; padding: 16px; }
   .upload-modal { max-height: 95vh; overflow-y: auto; padding: 18px 16px; border-radius: 14px 14px 0 0; }
+  .assigned-projects-popover { max-height: min(84vh, 560px); max-height: min(84dvh, 560px); border-radius: 12px; }
   .summary-popover { max-height: min(84vh, 720px); max-height: min(84dvh, 720px); border-radius: 12px; }
   .form-grid { grid-template-columns: 1fr; }
   .modal-footer { align-items: flex-start; flex-direction: column; }
