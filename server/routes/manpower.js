@@ -1,7 +1,7 @@
 import express from "express";
 import bcrypt from "bcryptjs";
 import rateLimit from "express-rate-limit";
-import { and, eq, inArray, ne, or } from "drizzle-orm";
+import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { accounts, authCredentials, authSessions, projects, reports } from "../../src/db/schema.js";
 import { asyncRoute, HttpError } from "../errors.js";
@@ -58,7 +58,7 @@ export function createManpowerRouter({ db }) {
       designation: accounts.designation,
       active: accounts.active,
       accountRole: accounts.accountRole,
-      passwordSet: authCredentials.passwordHash,
+      passwordSet: sql`${authCredentials.passwordHash} IS NOT NULL`,
       projectId: accounts.projectId,
       projectName: assignedProjects.name,
     })

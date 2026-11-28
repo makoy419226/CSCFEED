@@ -18,6 +18,7 @@ import {
   Folder,
   FolderKanban,
   Info,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Menu,
