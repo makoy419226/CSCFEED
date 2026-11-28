@@ -28,6 +28,8 @@ export function createProjectsRouter({ db, ready }) {
     const filters = [eq(projects.active, true)];
     if (!hasAdminAccess(req.identity.role) && req.identity.projectManagerProjectIds?.length) {
       filters.push(inArray(projects.id, req.identity.projectManagerProjectIds.map(Number)));
+    } else if (!hasAdminAccess(req.identity.role) && req.identity.role === "employee" && req.identity.projectId) {
+      filters.push(eq(projects.id, Number(req.identity.projectId)));
     }
     const [rows, reportCounts] = await Promise.all([
       db.select({

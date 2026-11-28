@@ -82,3 +82,16 @@ export const reportFiles = cscfeed.table("report_files", {
   uniqueIndex("report_files_storage_key_unique").on(table.storageKey),
   index("report_files_report_id_idx").on(table.reportId),
 ]);
+
+export const manpowerTransfers = cscfeed.table("manpower_transfers", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  employeePunchId: text("employee_punch_id").notNull(),
+  employeeName: text("employee_name").notNull(),
+  fromProjectName: text("from_project_name"),
+  toProjectName: text("to_project_name"),
+  transferredBy: bigint("transferred_by", { mode: "number" }).references(() => accounts.id, { onDelete: "set null" }),
+  transferredByName: text("transferred_by_name").notNull(),
+  transferredAt: timestamp("transferred_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("manpower_transfers_transferred_at_idx").on(table.transferredAt),
+]);

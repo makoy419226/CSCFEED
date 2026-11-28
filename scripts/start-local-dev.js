@@ -489,6 +489,7 @@ async function main() {
       "003_account_and_report_deletion.sql",
       "004_project_managers.sql",
       "005_project_manager_appointments.sql",
+      "006_manpower_transfer_log.sql",
     ].map((fileName) => readFile(path.join(root, "database", "migrations", fileName), "utf8")));
     await migrationClient.query("BEGIN");
     try {

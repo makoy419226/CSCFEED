@@ -449,6 +449,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
   const [clockNow, setClockNow] = useState(() => new Date());
   const [projects, setProjects] = useState([]);
   const [manpower, setManpower] = useState([]);
+  const [manpowerTransferLog, setManpowerTransferLog] = useState([]);
   const [manpowerSearch, setManpowerSearch] = useState("");
   const [selectedManpowerPunchIds, setSelectedManpowerPunchIds] = useState([]);
   const [isDeletingManpowerSelection, setIsDeletingManpowerSelection] = useState(false);
@@ -568,13 +569,16 @@ function Workspace({ user, onLogout, onUserUpdated }) {
           apiRequest(isAdministrator ? "/api/reports" : isProjectManager ? "/api/reports/managed" : "/api/reports/mine"),
           apiRequest("/api/config"),
         ]);
-        const manpowerResult = isAdministrator ? await apiRequest("/api/manpower") : null;
+        const [manpowerResult, transferLogResult] = isAdministrator
+          ? await Promise.all([apiRequest("/api/manpower"), apiRequest("/api/manpower/transfers")])
+          : [null, null];
         if (!active) return;
         setProjects(projectResult.data);
         setReports(reportResult.data);
         if (isProjectManager) setProjectFilter("all");
         setMaxUploadBytes(configResult.maxUploadBytes);
         if (manpowerResult) setManpower(manpowerResult.data);
+        if (transferLogResult) setManpowerTransferLog(transferLogResult.data);
       } catch (error) {
         if (active) setNotice(error instanceof Error ? error.message : "Unable to load project data.");
       } finally {
@@ -1325,6 +1329,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
       setManpower((items) => items.map((person) => person.punchId === result.data.punchId
         ? { ...person, projectId: result.data.projectId, projectName: result.data.projectName }
         : person));
+      if (result.data.transferLog) setManpowerTransferLog((items) => [result.data.transferLog, ...items].slice(0, 100));
       setNotice(`${result.data.name} ${result.data.projectName ? `transferred to ${result.data.projectName}` : "removed from project assignment"}.`);
       setTransferPerson(null);
     } catch (error) {
@@ -1380,6 +1385,8 @@ function Workspace({ user, onLogout, onUserUpdated }) {
         ...transferredPeople.map((person) => person.punchId),
       ]);
       if (transferredPeople.length) {
+        const newLogEntries = transferredPeople.map((person) => person.transferLog).filter(Boolean);
+        if (newLogEntries.length) setManpowerTransferLog((items) => [...newLogEntries.reverse(), ...items].slice(0, 100));
         const transferredByPunchId = new Map(transferredPeople.map((person) => [person.punchId, person]));
         setManpower((items) => items.map((person) => {
           const updated = transferredByPunchId.get(person.punchId);
@@ -1613,6 +1620,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
               updatingProjectManagerAccessPunchId={updatingProjectManagerAccessPunchId}
               deletingManpowerPunchId={deletingManpowerPunchId}
               transferringManpowerPunchId={transferringManpowerPunchId}
+              transferLog={manpowerTransferLog}
               onSearch={setManpowerSearch}
               onToggleSelection={toggleManpowerSelection}
               onToggleVisibleSelection={toggleVisibleManpowerSelection}
@@ -2392,6 +2400,7 @@ function ManpowerPage({
   updatingProjectManagerAccessPunchId,
   deletingManpowerPunchId,
   transferringManpowerPunchId,
+  transferLog,
   onSearch,
   onToggleSelection,
   onToggleVisibleSelection,
@@ -2423,8 +2432,24 @@ function ManpowerPage({
     </div>
     <aside className="admin-rights-note" aria-label="Administrator permissions">
       <ShieldCheck size={17} />
-      <span><strong>Admins can view and download all reports, manage projects and manpower accounts, and archive reports.</strong> The Super User appoints active employees as Project Managers, then assigns them to one or more projects. Each project can have one Project Manager; Project Managers can upload, edit, archive, and export reports only in their assigned projects. Admin access remains separate from Project Manager appointments. Only the Super User can manage account settings and permanently delete employee or appointed admin accounts. Deleted users' reports and uploader attribution are preserved. The Super User cannot be changed by appointed admins. Appointed admins sign in with Punch ID only and should be trusted users.</span>
+      <span><strong>Admins can view and download all reports, manage projects and manpower accounts, and archive reports.</strong> Unassigned employees can view all active projects and submit reports to any of them. Assigned employees can view and submit reports only to their assigned project; their existing reports stay in their personal report history after a transfer. The Super User appoints active employees as Project Managers, then assigns them to one or more projects. Each project can have one Project Manager; Project Managers can upload, edit, archive, and export reports only in their assigned projects. Project transfers are recorded below. Admin access remains separate from Project Manager appointments. Only the Super User can manage account settings and permanently delete employee or appointed admin accounts. Deleted users' reports and uploader attribution are preserved. The Super User cannot be changed by appointed admins. Appointed admins sign in with Punch ID only and should be trusted users.</span>
     </aside>
+    <section className="report-section" aria-labelledby="manpower-transfer-log-heading">
+      <div className="section-heading">
+        <div><h2 id="manpower-transfer-log-heading">Recent project transfers</h2><p>Assignment changes for employee accounts</p></div>
+      </div>
+      {transferLog.length ? <div className="table-wrap"><table className="manpower-table">
+        <thead><tr><th>DATE</th><th>EMPLOYEE</th><th>PUNCH ID</th><th>FROM</th><th>TO</th><th>UPDATED BY</th></tr></thead>
+        <tbody>{transferLog.map((entry) => <tr key={entry.id}>
+          <td>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(entry.transferredAt))}</td>
+          <td className="manpower-name">{entry.employeeName}</td>
+          <td>{entry.employeePunchId}</td>
+          <td>{entry.fromProjectName || "Unassigned"}</td>
+          <td>{entry.toProjectName || "Unassigned"}</td>
+          <td>{entry.transferredByName}</td>
+        </tr>)}</tbody>
+      </table></div> : <p className="empty-state">No project transfers recorded yet.</p>}
+    </section>
     <section className="report-section" aria-labelledby="manpower-list-heading">
       <div className="section-heading">
         <div><h2 id="manpower-list-heading">Employee directory</h2><p>{people.length} of {total} manpower accounts</p></div>

@@ -58,6 +58,7 @@ export async function resolveIdentity(db, token) {
       name: accounts.fullName,
       role: accounts.accountRole,
       punchId: accounts.punchId,
+      projectId: accounts.projectId,
       username: authCredentials.username,
     })
     .from(authSessions)
@@ -77,6 +78,7 @@ export async function resolveIdentity(db, token) {
       role: record.role,
       username: record.username || record.punchId,
       punchId: record.punchId,
+      projectId: record.projectId ? String(record.projectId) : null,
       projectManagerProjectIds: record.role === "project_manager"
         ? await listProjectManagerProjectIds(db, record.id)
         : [],

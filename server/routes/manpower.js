@@ -1,9 +1,9 @@
 import express from "express";
 import bcrypt from "bcryptjs";
 import rateLimit from "express-rate-limit";
-import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import { accounts, authCredentials, authSessions, projects, reports } from "../../src/db/schema.js";
+import { accounts, authCredentials, authSessions, manpowerTransfers, projects, reports } from "../../src/db/schema.js";
 import { asyncRoute, HttpError } from "../errors.js";
 import { requireAdmin, requireIdentity, requireSuperUser, superUserRole } from "../identity.js";
 import {
@@ -92,6 +92,22 @@ export function createManpowerRouter({ db }) {
     });
   }));
 
+  router.get("/transfers", asyncRoute(async (_req, res) => {
+    const rows = await db.select({
+      id: manpowerTransfers.id,
+      employeePunchId: manpowerTransfers.employeePunchId,
+      employeeName: manpowerTransfers.employeeName,
+      fromProjectName: manpowerTransfers.fromProjectName,
+      toProjectName: manpowerTransfers.toProjectName,
+      transferredByName: manpowerTransfers.transferredByName,
+      transferredAt: manpowerTransfers.transferredAt,
+    })
+      .from(manpowerTransfers)
+      .orderBy(desc(manpowerTransfers.transferredAt), desc(manpowerTransfers.id))
+      .limit(100);
+    return res.json({ success: true, data: rows });
+  }));
+
   router.patch("/:punchId/password", requireSuperUser, passwordManagementLimiter, validate(punchIdParamsSchema, "params"), validate(manpowerPasswordSchema), asyncRoute(async (req, res) => {
     const result = await db.transaction(async (tx) => {
       const [target] = await tx.select({
@@ -161,9 +177,29 @@ export function createManpowerRouter({ db }) {
 
       const nextProjectId = destination?.id ?? null;
       if (Number(target.projectId) !== Number(nextProjectId)) {
+        const [source] = target.projectId
+          ? await tx.select({ name: projects.name }).from(projects).where(eq(projects.id, target.projectId))
+          : [];
         await tx.update(accounts)
           .set({ projectId: nextProjectId })
           .where(eq(accounts.id, target.id));
+        const [transfer] = await tx.insert(manpowerTransfers).values({
+          employeePunchId: target.punchId,
+          employeeName: target.fullName,
+          fromProjectName: source?.name || null,
+          toProjectName: destination?.name || null,
+          transferredBy: req.identity.id,
+          transferredByName: req.identity.name,
+        }).returning({
+          id: manpowerTransfers.id,
+          employeePunchId: manpowerTransfers.employeePunchId,
+          employeeName: manpowerTransfers.employeeName,
+          fromProjectName: manpowerTransfers.fromProjectName,
+          toProjectName: manpowerTransfers.toProjectName,
+          transferredByName: manpowerTransfers.transferredByName,
+          transferredAt: manpowerTransfers.transferredAt,
+        });
+        target.transferLog = transfer;
       }
 
       const projectManagerProjects = target.accountRole === "project_manager"
@@ -173,12 +209,15 @@ export function createManpowerRouter({ db }) {
           .orderBy(projects.name)
         : [];
 
-      return toPerson({
-        ...target,
-        projectId: nextProjectId,
-        projectName: destination?.name || null,
-        projectManagerProjects,
-      });
+      return {
+        ...toPerson({
+          ...target,
+          projectId: nextProjectId,
+          projectName: destination?.name || null,
+          projectManagerProjects,
+        }),
+        transferLog: target.transferLog || null,
+      };
     });
 
     return res.json({ success: true, data: result });

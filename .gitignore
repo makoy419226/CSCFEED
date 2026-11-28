@@ -4,3 +4,10 @@ dist/
 .env.*
 !.env.example
 /storage/
+
+# Keep device-specific manpower rosters out of Git and other PCs.
+src/manpower.js
+manpower-list.*
+manapower-list.*
+manpowerlist.*
+manapowerlist.*

@@ -600,6 +600,10 @@ export function createReportsRouter({ db, maxUploadBytes }) {
           && !req.identity.projectManagerProjectIds.includes(String(project.id))) {
           throw new HttpError(403, "You can only upload reports to your assigned projects.");
         }
+        if (req.identity.role === "employee" && req.identity.projectId
+          && req.identity.projectId !== String(project.id)) {
+          throw new HttpError(403, "You can only upload reports to your assigned project.");
+        }
 
         const firstFile = files[0];
         const firstCommittedFile = committedFiles[0];

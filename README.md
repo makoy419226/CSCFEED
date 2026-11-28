@@ -32,8 +32,9 @@ If either saved local role password is rejected, `npm run dev:local` offers an i
 - Browse and filter reports by project, date, or search terms.
 - Add projects with a name, description, and color, then edit those details later.
 - Delete projects only when no reports reference them.
-- Administer the supplied manpower directory by Punch ID, employee name, designation, role, and active status.
-- The Super User can edit or transfer an employee's assigned project from the Manpower directory. Project Manager assignments can be edited together, allowing a manager to manage multiple projects. The project-membership migration assigns existing accounts to DS415 except reserved Punch ID 5755; newly added accounts start unassigned.
+- Administer manpower accounts by Punch ID, employee name, designation, role, and active status.
+- Unassigned employees can view all active projects and submit reports to any of them. Assigned employees can view and submit reports only to their assigned project; previously submitted reports remain in their personal report history after a transfer.
+- The Super User can edit or transfer an employee's assigned project from the Manpower directory. Project Manager assignments can be edited together, allowing a manager to manage multiple projects. Transfers are recorded in the Manpower page's project transfer log.
 - Admin access remains separate from Project Manager appointments. Appointed admins can view all reports, manage projects and manpower accounts, and archive reports; they cannot change roles or the Super User account.
 - The Super User can appoint active employees as Project Managers and assign them to multiple projects (one manager per project). Project Managers can view, upload, download, edit, archive, and export reports only in their assigned projects; they cannot manage accounts or projects.
 - The Super User can permanently delete selected reports with their evidence files and delete employee or appointed-admin accounts. A deleted user's reports and uploader attribution are retained.
@@ -71,11 +72,11 @@ Employee and Project Manager sign-in currently accepts Punch ID alone, as reques
 
 ## PostgreSQL data layer
 
-Apply the schema and idempotent 54-person roster seed with `psql`:
+Apply the database schema with `psql`. Manpower accounts are device/database-specific; add them through the app after setup rather than seeding a local roster:
 
 ```powershell
 $env:MIGRATION_DATABASE_URL = "postgres://..."
-psql "$env:MIGRATION_DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f .\database\migrations\001_core.sql -f .\database\migrations\002_admin_roles.sql -f .\database\migrations\003_account_and_report_deletion.sql -f .\database\migrations\004_project_managers.sql
+psql "$env:MIGRATION_DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f .\database\migrations\001_core.sql -f .\database\migrations\002_admin_roles.sql -f .\database\migrations\003_account_and_report_deletion.sql -f .\database\migrations\004_project_managers.sql -f .\database\migrations\005_project_manager_appointments.sql -f .\database\migrations\006_manpower_transfer_log.sql
 ```
 
 Apply the Drizzle-managed authentication tables after the core schema:
@@ -105,4 +106,4 @@ GRANT SELECT, INSERT, UPDATE, DELETE
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA cscfeed TO cscfeed_app;
 ```
 
-The API must set `cscfeed.actor_punch_id` transaction-locally before calling the legacy account-aware PL/pgSQL functions. Never let a browser set that database context directly or expose database credentials to the client. The API bootstraps the initial admin account on first startup; the SQL roster seed itself does not promote an employee. Report rows store the first attachment for compatibility; all files are indexed in `cscfeed.report_files`, and their bytes are kept under the configured local `UPLOAD_DIR`.
+The API must set `cscfeed.actor_punch_id` transaction-locally before calling the legacy account-aware PL/pgSQL functions. Never let a browser set that database context directly or expose database credentials to the client. The API bootstraps the initial admin account on first startup; employees are added through the app. Report rows store the first attachment for compatibility; all files are indexed in `cscfeed.report_files`, and their bytes are kept under the configured local `UPLOAD_DIR`.
