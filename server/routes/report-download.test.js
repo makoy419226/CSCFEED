@@ -118,6 +118,58 @@ function createProjectExportDb(projectManagerProjectIds, reportRows, attachmentR
   };
 }
 
+function createAssignedProjectsExportDb(projectManagerProjectIds, projectRows, reportRows, attachmentRows) {
+  let selectCalls = 0;
+  const whereConditions = [];
+  const ids = projectManagerProjectIds.map(Number);
+  return {
+    whereConditions,
+    select() {
+      const call = ++selectCalls;
+      return {
+        from() { return this; },
+        innerJoin() { return this; },
+        leftJoin() { return this; },
+        where(condition) {
+          whereConditions.push({ call, condition });
+          return this;
+        },
+        async limit() {
+          return call === 1 ? [{
+            id: 8,
+            name: "Project Manager",
+            role: "project_manager",
+            punchId: "2468",
+            username: "2468",
+          }] : [];
+        },
+        async orderBy() {
+          if (call === 2) return ids.map((id) => ({ id }));
+          if (call === 3) return projectRows;
+          if (call === 4) return reportRows;
+          return attachmentRows;
+        },
+      };
+    },
+  };
+}
+
+function readSqlParts(sql) {
+  const parts = [];
+  for (const chunk of sql?.queryChunks || []) {
+    if (Array.isArray(chunk)) {
+      parts.push(...readSqlParts({ queryChunks: chunk }));
+    } else if (chunk?.queryChunks) {
+      parts.push(...readSqlParts(chunk));
+    } else if (chunk?.encoder && Object.prototype.hasOwnProperty.call(chunk, "value")) {
+      parts.push({ type: "parameter", value: chunk.value });
+    } else if (chunk?.name) {
+      parts.push({ type: "column", value: chunk.name });
+    }
+  }
+  return parts;
+}
+
 async function createStoredFile(contents) {
   const storageKey = randomUUID();
   const filePath = getStoredFilePath(storageKey);
@@ -256,4 +308,63 @@ test("Project Manager project export includes a PDF and evidence for each assign
     },
     "/project/5/export",
   );
+});
+
+test("Project Manager bulk export groups all assigned projects into their own folders", async () => {
+  const firstKey = await createStoredFile("first assigned project evidence");
+  const secondKey = await createStoredFile("second assigned project evidence");
+  const projectRows = [
+    { id: 5, name: "Project A" },
+    { id: 6, name: "Project B" },
+  ];
+  const reportRows = [
+    {
+      id: 41,
+      projectId: 5,
+      projectName: "Project A",
+      title: "Daily progress",
+      description: "First project report",
+      uploaderName: "Site Employee",
+      reportDate: "2026-11-27",
+      fileName: "first.jpg",
+      storageKey: firstKey,
+      fileSizeBytes: 31,
+    },
+    {
+      id: 42,
+      projectId: 6,
+      projectName: "Project B",
+      title: "Equipment update",
+      description: "Second project report",
+      uploaderName: "Site Employee",
+      reportDate: "2026-11-26",
+      fileName: "second.pdf",
+      storageKey: secondKey,
+      fileSizeBytes: 32,
+    },
+  ];
+  const attachmentRows = [
+    { id: 51, reportId: 41, fileName: "first.jpg", storageKey: firstKey, fileSizeBytes: 31 },
+    { id: 52, reportId: 42, fileName: "second.pdf", storageKey: secondKey, fileSizeBytes: 32 },
+  ];
+  const db = createAssignedProjectsExportDb([5, 6], projectRows, reportRows, attachmentRows);
+
+  await withReportsApp(db, async (get) => {
+    const response = await get();
+    const archive = Buffer.from(await response.arrayBuffer());
+    const entries = readZipEntries(archive);
+    const projectScope = db.whereConditions.find(({ call }) => call === 3);
+    const projectScopeValues = readSqlParts(projectScope.condition)
+      .filter((part) => part.type === "parameter")
+      .map((part) => Number(part.value));
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-disposition"), /assigned-projects-reports\.zip/);
+    assert.ok(projectScopeValues.includes(5));
+    assert.ok(projectScopeValues.includes(6));
+    assert.equal(entries.get("5-Project_A/41-Daily_progress/evidence/first.jpg").toString(), "first assigned project evidence");
+    assert.equal(entries.get("5-Project_A/41-Daily_progress/report.pdf").subarray(0, 5).toString(), "%PDF-");
+    assert.equal(entries.get("6-Project_B/42-Equipment_update/evidence/second.pdf").toString(), "second assigned project evidence");
+    assert.equal(entries.get("6-Project_B/42-Equipment_update/report.pdf").subarray(0, 5).toString(), "%PDF-");
+  }, "/projects/export");
 });

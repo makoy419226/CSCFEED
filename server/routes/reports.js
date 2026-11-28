@@ -127,6 +127,11 @@ function projectArchiveFileName(projectName) {
   return `${safeName}-reports.zip`;
 }
 
+function projectArchiveFolder(report) {
+  const safeName = report.projectName.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+/, "").slice(0, 80) || "project";
+  return `${report.projectId}-${safeName}`;
+}
+
 function reportArchiveFolder(report) {
   const safeTitle = report.title.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+/, "").slice(0, 80) || "report";
   return `${report.id}-${safeTitle}`;
@@ -163,6 +168,42 @@ function uniqueEvidencePath(fileName, index, usedNames) {
   }
   usedNames.add(candidate.toLowerCase());
   return `evidence/${candidate}`;
+}
+
+async function addReportEntries(zipFile, reportRows, attachmentRows, includeProjectFolders = false) {
+  const attachmentsByReport = new Map();
+  for (const attachment of attachmentRows) {
+    const reportId = String(attachment.reportId);
+    const files = attachmentsByReport.get(reportId) || [];
+    files.push(attachment);
+    attachmentsByReport.set(reportId, files);
+  }
+
+  for (const report of reportRows) {
+    const attachments = attachmentsByReport.get(String(report.id));
+    const files = attachments?.length ? attachments : [{
+      fileName: report.fileName,
+      storageKey: report.storageKey,
+      fileSizeBytes: report.fileSizeBytes,
+    }];
+    const usedEvidenceNames = new Set();
+    const folderParts = includeProjectFolders ? [projectArchiveFolder(report)] : [];
+    folderParts.push(reportArchiveFolder(report));
+    const folder = folderParts.join("/");
+    for (const [index, file] of files.entries()) {
+      const filePath = getStoredFilePath(file.storageKey);
+      try {
+        await access(filePath);
+      } catch (error) {
+        if (error.code === "ENOENT") throw new HttpError(404, `An attachment for report ${report.id} is missing.`);
+        throw error;
+      }
+      zipFile.addFile(filePath, `${folder}/${uniqueEvidencePath(file.fileName, index, usedEvidenceNames)}`);
+    }
+
+    const pdf = await createReportPdf(report, files);
+    zipFile.addBuffer(pdf, `${folder}/report.pdf`);
+  }
 }
 
 async function cleanupUpload(filePath) {
@@ -336,6 +377,65 @@ export function createReportsRouter({ db, maxUploadBytes }) {
     ));
   }));
 
+  router.get("/projects/export", requireProjectReportManager, asyncRoute(async (req, res, next) => {
+    const projectFilters = [eq(projects.active, true)];
+    if (!hasAdminAccess(req.identity.role)) {
+      projectFilters.push(inArray(projects.id, req.identity.projectManagerProjectIds.map(Number)));
+    }
+
+    const projectRows = await db.select({
+      id: projects.id,
+      name: projects.name,
+    })
+      .from(projects)
+      .where(and(...projectFilters))
+      .orderBy(asc(projects.name));
+
+    if (projectRows.length === 0) throw new HttpError(404, "There are no active projects available to export.");
+
+    const projectIds = projectRows.map((project) => project.id);
+    const reportRows = await db.select({
+      id: reports.id,
+      projectId: reports.projectId,
+      projectName: projects.name,
+      title: reports.title,
+      description: reports.description,
+      uploaderName: reports.uploaderName,
+      reportDate: reports.reportDate,
+      fileName: reports.fileName,
+      storageKey: reports.storageKey,
+      fileSizeBytes: reports.fileSizeBytes,
+    })
+      .from(reports)
+      .innerJoin(projects, eq(projects.id, reports.projectId))
+      .where(and(
+        inArray(reports.projectId, projectIds),
+        eq(projects.active, true),
+        isNull(reports.archivedAt),
+      ))
+      .orderBy(asc(projects.name), desc(reports.reportDate), desc(reports.createdAt));
+
+    if (reportRows.length === 0) throw new HttpError(404, "There are no active reports to export.");
+
+    const attachmentRows = await db.select({
+      id: reportFiles.id,
+      reportId: reportFiles.reportId,
+      fileName: reportFiles.fileName,
+      storageKey: reportFiles.storageKey,
+      fileSizeBytes: reportFiles.fileSizeBytes,
+    })
+      .from(reportFiles)
+      .where(inArray(reportFiles.reportId, reportRows.map((report) => report.id)))
+      .orderBy(asc(reportFiles.id));
+
+    const zipFile = new yazl.ZipFile();
+    await addReportEntries(zipFile, reportRows, attachmentRows, true);
+
+    res.attachment(hasAdminAccess(req.identity.role) ? "all-projects-reports.zip" : "assigned-projects-reports.zip");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    streamZipFile(zipFile, res, next);
+  }));
+
   router.get("/project/:projectId/export", requireProjectReportManager, validate(projectIdParamsSchema, "params"), asyncRoute(async (req, res, next) => {
     const projectId = req.validated.params.projectId;
     if (!canManageProjectReports(req.identity, projectId)) {
@@ -375,38 +475,8 @@ export function createReportsRouter({ db, maxUploadBytes }) {
       .from(reportFiles)
       .where(inArray(reportFiles.reportId, reportRows.map((report) => report.id)))
       .orderBy(asc(reportFiles.id));
-    const attachmentsByReport = new Map();
-    for (const attachment of attachmentRows) {
-      const reportId = String(attachment.reportId);
-      const files = attachmentsByReport.get(reportId) || [];
-      files.push(attachment);
-      attachmentsByReport.set(reportId, files);
-    }
-
     const zipFile = new yazl.ZipFile();
-    for (const report of reportRows) {
-      const attachments = attachmentsByReport.get(String(report.id));
-      const files = attachments?.length ? attachments : [{
-        fileName: report.fileName,
-        storageKey: report.storageKey,
-        fileSizeBytes: report.fileSizeBytes,
-      }];
-      const usedEvidenceNames = new Set();
-      const folder = reportArchiveFolder(report);
-      for (const [index, file] of files.entries()) {
-        const filePath = getStoredFilePath(file.storageKey);
-        try {
-          await access(filePath);
-        } catch (error) {
-          if (error.code === "ENOENT") throw new HttpError(404, `An attachment for report ${report.id} is missing.`);
-          throw error;
-        }
-        zipFile.addFile(filePath, `${folder}/${uniqueEvidencePath(file.fileName, index, usedEvidenceNames)}`);
-      }
-
-      const pdf = await createReportPdf(report, files);
-      zipFile.addBuffer(pdf, `${folder}/report.pdf`);
-    }
+    await addReportEntries(zipFile, reportRows, attachmentRows);
 
     res.attachment(projectArchiveFileName(reportRows[0].projectName));
     res.setHeader("X-Content-Type-Options", "nosniff");

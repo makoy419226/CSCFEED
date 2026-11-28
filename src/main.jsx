@@ -449,6 +449,12 @@ function Workspace({ user, onLogout, onUserUpdated }) {
   const [projects, setProjects] = useState([]);
   const [manpower, setManpower] = useState([]);
   const [manpowerSearch, setManpowerSearch] = useState("");
+  const [selectedManpowerPunchIds, setSelectedManpowerPunchIds] = useState([]);
+  const [isDeletingManpowerSelection, setIsDeletingManpowerSelection] = useState(false);
+  const [isBulkTransferOpen, setIsBulkTransferOpen] = useState(false);
+  const [bulkTransferProjectId, setBulkTransferProjectId] = useState("");
+  const [bulkTransferError, setBulkTransferError] = useState("");
+  const [isBulkTransferringManpower, setIsBulkTransferringManpower] = useState(false);
   const [updatingProjectManagerAccessPunchId, setUpdatingProjectManagerAccessPunchId] = useState(null);
   const [deletingManpowerPunchId, setDeletingManpowerPunchId] = useState(null);
   const [transferringManpowerPunchId, setTransferringManpowerPunchId] = useState(null);
@@ -521,9 +527,14 @@ function Workspace({ user, onLogout, onUserUpdated }) {
   const isProjectManager = !isAdministrator && user.role === "project_manager" && Boolean(user.projectManagerProjectIds?.length);
   const canManageProjectReports = isAdministrator || isProjectManager;
   const projectColors = ["blue", "orange", "green", "purple"];
-  const projectOptions = isProjectManager
-    ? projects
-    : [{ id: "all", name: "All projects" }, ...projects];
+  const projectOptions = [
+    { id: "all", name: isProjectManager ? "All assigned projects" : "All projects" },
+    ...projects,
+  ];
+  const selectProjectFilter = (selectedProjectId) => {
+    const selectedProject = projects.find((project) => String(project.id) === selectedProjectId);
+    setProjectFilter(selectedProjectId === "all" ? "all" : selectedProject?.id ?? projectFilter);
+  };
   const isSigningOut = useRef(false);
 
   useEffect(() => {
@@ -1070,6 +1081,16 @@ function Workspace({ user, onLogout, onUserUpdated }) {
     link.remove();
   };
 
+  const exportAllProjectReports = () => {
+    if (!canManageProjectReports) return;
+    const link = document.createElement("a");
+    link.href = "/api/reports/projects/export";
+    link.download = isProjectManager ? "assigned-projects-reports.zip" : "all-projects-reports.zip";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
   const archiveReport = async (report) => {
     if (!canManageProjectReports || !window.confirm(`Archive "${report.title}"?`)) return;
     try {
@@ -1148,6 +1169,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
     try {
       const result = await apiRequest(`/api/manpower/${encodeURIComponent(person.punchId)}`, { method: "DELETE" });
       setManpower((items) => items.filter((item) => item.punchId !== person.punchId));
+      setSelectedManpowerPunchIds((ids) => ids.filter((id) => id !== person.punchId));
       for (const project of person.projectManagerProjects || []) {
         syncProjectManagerAssignment(project.id, null, null);
       }
@@ -1160,6 +1182,63 @@ function Workspace({ user, onLogout, onUserUpdated }) {
       setNotice(error instanceof Error ? error.message : "Unable to delete the manpower account.");
     } finally {
       setDeletingManpowerPunchId(null);
+    }
+    window.setTimeout(() => setNotice(""), 7000);
+  };
+
+  const toggleManpowerSelection = (punchId, selected) => {
+    setSelectedManpowerPunchIds((ids) => selected
+      ? ids.includes(punchId) ? ids : [...ids, punchId]
+      : ids.filter((id) => id !== punchId));
+  };
+
+  const toggleVisibleManpowerSelection = (people, selected) => {
+    const visiblePunchIds = new Set(people.map((person) => person.punchId));
+    setSelectedManpowerPunchIds((ids) => selected
+      ? [...new Set([...ids, ...visiblePunchIds])]
+      : ids.filter((id) => !visiblePunchIds.has(id)));
+  };
+
+  const deleteSelectedManpowerAccounts = async () => {
+    if (!isSuperUser || isDeletingManpowerSelection || deletingManpowerPunchId) return;
+    const selectedPeople = manpower.filter((person) => selectedManpowerPunchIds.includes(person.punchId));
+    if (!selectedPeople.length) return;
+    if (!window.confirm(`Permanently delete ${selectedPeople.length} selected manpower account${selectedPeople.length === 1 ? "" : "s"}? Submitted reports and uploader attribution will be preserved. This cannot be undone.`)) return;
+
+    setIsDeletingManpowerSelection(true);
+    const deletedPeople = [];
+    const failures = [];
+    let preservedReportCount = 0;
+    try {
+      for (const person of selectedPeople) {
+        try {
+          const result = await apiRequest(`/api/manpower/${encodeURIComponent(person.punchId)}`, { method: "DELETE" });
+          deletedPeople.push(person);
+          preservedReportCount += result.data.preservedReportCount;
+        } catch (error) {
+          failures.push(`${person.name} (${person.punchId}): ${error instanceof Error ? error.message : "Unable to delete this account."}`);
+        }
+      }
+
+      const deletedPunchIds = new Set(deletedPeople.map((person) => person.punchId));
+      if (deletedPeople.length) {
+        setManpower((items) => items.filter((person) => !deletedPunchIds.has(person.punchId)));
+        setSelectedManpowerPunchIds((ids) => ids.filter((id) => !deletedPunchIds.has(id)));
+        for (const person of deletedPeople) {
+          for (const project of person.projectManagerProjects || []) {
+            syncProjectManagerAssignment(project.id, null, null);
+          }
+        }
+        if (reportLogPerson && deletedPunchIds.has(reportLogPerson.punchId)) {
+          setReportLogPerson(null);
+          setEmployeeReports([]);
+        }
+      }
+
+      const summary = `${deletedPeople.length} account${deletedPeople.length === 1 ? "" : "s"} deleted; ${preservedReportCount} submitted report${preservedReportCount === 1 ? "" : "s"} preserved.`;
+      setNotice(failures.length ? `${summary} ${failures.length} failed: ${failures.join(" ")}` : summary);
+    } finally {
+      setIsDeletingManpowerSelection(false);
     }
     window.setTimeout(() => setNotice(""), 7000);
   };
@@ -1193,6 +1272,72 @@ function Workspace({ user, onLogout, onUserUpdated }) {
       setTransferringManpowerPunchId(null);
     }
     window.setTimeout(() => setNotice(""), 5000);
+  };
+
+  const openBulkProjectTransfer = () => {
+    if (!isSuperUser || !selectedManpowerPunchIds.length || isBulkTransferringManpower || transferringManpowerPunchId) return;
+    setBulkTransferProjectId("");
+    setBulkTransferError("");
+    setIsBulkTransferOpen(true);
+  };
+
+  const transferSelectedManpower = async (event) => {
+    event.preventDefault();
+    if (!isSuperUser || isBulkTransferringManpower || transferringManpowerPunchId) return;
+    const selectedPeople = manpower.filter((person) => selectedManpowerPunchIds.includes(person.punchId));
+    if (!selectedPeople.length) return;
+
+    const projectId = bulkTransferProjectId ? Number(bulkTransferProjectId) : null;
+    const unchangedPeople = selectedPeople.filter((person) => String(person.projectId || "") === String(projectId || ""));
+    const peopleToTransfer = selectedPeople.filter((person) => !unchangedPeople.includes(person));
+    if (!peopleToTransfer.length) {
+      setNotice("All selected accounts already have that project assignment.");
+      setSelectedManpowerPunchIds([]);
+      setIsBulkTransferOpen(false);
+      return;
+    }
+
+    setIsBulkTransferringManpower(true);
+    setBulkTransferError("");
+    const transferredPeople = [];
+    const failures = [];
+    try {
+      for (const person of peopleToTransfer) {
+        try {
+          const result = await apiRequest(`/api/manpower/${encodeURIComponent(person.punchId)}/project`, {
+            method: "PATCH",
+            body: { projectId },
+          });
+          transferredPeople.push(result.data);
+        } catch (error) {
+          failures.push(`${person.name} (${person.punchId}): ${error instanceof Error ? error.message : "Unable to transfer this account."}`);
+        }
+      }
+
+      const handledPunchIds = new Set([
+        ...unchangedPeople.map((person) => person.punchId),
+        ...transferredPeople.map((person) => person.punchId),
+      ]);
+      if (transferredPeople.length) {
+        const transferredByPunchId = new Map(transferredPeople.map((person) => [person.punchId, person]));
+        setManpower((items) => items.map((person) => {
+          const updated = transferredByPunchId.get(person.punchId);
+          return updated
+            ? { ...person, projectId: updated.projectId, projectName: updated.projectName }
+            : person;
+        }));
+      }
+      setSelectedManpowerPunchIds((ids) => ids.filter((id) => !handledPunchIds.has(id)));
+      if (!failures.length) setIsBulkTransferOpen(false);
+
+      const destinationName = projects.find((project) => String(project.id) === String(projectId))?.name || "Unassigned";
+      const summary = `${transferredPeople.length} account${transferredPeople.length === 1 ? "" : "s"} transferred to ${destinationName}.`;
+      setNotice(failures.length ? `${summary} ${failures.length} failed; review the details in the transfer dialog.` : summary);
+      setBulkTransferError(failures.length ? `${failures.length} transfer${failures.length === 1 ? "" : "s"} failed: ${failures.join(" ")}` : "");
+    } finally {
+      setIsBulkTransferringManpower(false);
+    }
+    window.setTimeout(() => setNotice(""), 7000);
   };
 
   const openProjectManagerAssignment = (person) => {
@@ -1328,11 +1473,24 @@ function Workspace({ user, onLogout, onUserUpdated }) {
         {canManageProjectReports && <>
           <div className="nav-label project-nav-label">YOUR PROJECTS {isAdministrator && <button aria-label="Add project" onClick={() => openProjectForm()}><Plus size={15} /></button>}</div>
           <nav className="project-nav" aria-label="Projects">
-            {projectsWithReports.map((project) => (
-              <button key={project.id} className={`nav-item project-nav-item ${projectFilter === project.id ? "nav-active" : ""}`} onClick={() => { setProjectFilter(project.id); navigate("Reports"); }}>
-                <span className={`project-dot dot-${project.color}`} /><span>{project.shortName}</span>
-              </button>
-            ))}
+            <label className="project-nav-select-wrap">
+              <select
+                className="project-nav-select"
+                aria-label="Select a project"
+                value={projectFilter}
+                onChange={(event) => {
+                  selectProjectFilter(event.target.value);
+                  navigate("Reports");
+                }}
+              >
+                <option value="all">{isProjectManager ? "All assigned projects" : "All projects"}</option>
+                {projectsWithReports.length === 0 && <option value="" disabled>No projects available</option>}
+                {projectsWithReports.map((project) => (
+                  <option key={project.id} value={project.id}>{project.shortName}</option>
+                ))}
+              </select>
+              <ChevronDown size={15} aria-hidden="true" />
+            </label>
           </nav>
         </>}
 
@@ -1382,14 +1540,22 @@ function Workspace({ user, onLogout, onUserUpdated }) {
               people={filteredManpower}
               total={manpower.length}
               query={manpowerSearch}
+              selectedPunchIds={selectedManpowerPunchIds}
               canEditProjectAssignments={isSuperUser}
               canDeleteAccounts={isSuperUser}
               canTransferProjects={isSuperUser}
+              isDeletingSelection={isDeletingManpowerSelection}
+              isBulkTransferring={isBulkTransferringManpower}
               canAssignProjectManagers={isSuperUser}
               updatingProjectManagerAccessPunchId={updatingProjectManagerAccessPunchId}
               deletingManpowerPunchId={deletingManpowerPunchId}
               transferringManpowerPunchId={transferringManpowerPunchId}
               onSearch={setManpowerSearch}
+              onToggleSelection={toggleManpowerSelection}
+              onToggleVisibleSelection={toggleVisibleManpowerSelection}
+              onClearSelection={() => setSelectedManpowerPunchIds([])}
+              onBulkDelete={deleteSelectedManpowerAccounts}
+              onBulkTransfer={openBulkProjectTransfer}
               onAdd={() => openManpowerForm()}
               onEdit={openManpowerForm}
               onToggleActive={toggleManpowerActive}
@@ -1449,7 +1615,12 @@ function Workspace({ user, onLogout, onUserUpdated }) {
                     <h2 id="project-report-folders-title">Project folders</h2>
                     <p>{isProjectManager ? "Your assigned project folders" : "Select a project folder to view its reports"}</p>
                   </div>
-                  {projectFilter !== "all" && isAdministrator && <button className="text-button" type="button" onClick={() => setProjectFilter("all")}>All project reports <ArrowUpRight size={15} /></button>}
+                  <div className="project-report-folder-actions">
+                    {projectFilter !== "all" && isAdministrator && <button className="text-button" type="button" onClick={() => setProjectFilter("all")}>All project reports <ArrowUpRight size={15} /></button>}
+                    {projectsWithReports.length > 0 && reports.length > 0 && <button className="button button-secondary" type="button" aria-label={isProjectManager ? "Export all assigned project reports as a ZIP" : "Export all project reports as a ZIP"} onClick={exportAllProjectReports}>
+                      <ArrowDownToLine size={15} />{isProjectManager ? "Export all assigned ZIP" : "Export all ZIP"}
+                    </button>}
+                  </div>
                 </div>
                 {projectsWithReports.length ? <div className="project-report-folders">
                   {projectsWithReports.map((project) => (
@@ -1491,7 +1662,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
 
                 <div className="filters">
                   <label className="search-field"><Search size={17} /><input aria-label="Search reports" placeholder="Search reports..." value={search} onChange={(event) => setSearch(event.target.value)} /><kbd>⌘ K</kbd></label>
-                  {!isProjectManager && <label className="select-field"><BriefcaseBusiness size={16} /><select aria-label="Filter by project" value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>{projectOptions.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><ChevronDown size={15} /></label>}
+                  {canManageProjectReports && <label className="select-field"><BriefcaseBusiness size={16} /><select aria-label={isProjectManager ? "Filter reports by assigned project" : "Filter by project"} value={projectFilter} onChange={(event) => selectProjectFilter(event.target.value)}>{projectOptions.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><ChevronDown size={15} /></label>}
                   <label className="date-filter"><CalendarDays size={16} /><span>From</span><input aria-label="Filter reports from date" type="date" value={dateFromFilter} aria-invalid={hasInvalidDateRange} onChange={(event) => setDateFromFilter(event.target.value)} />{dateFromFilter && <button type="button" aria-label="Clear start date" onClick={() => setDateFromFilter("")}><X size={14} /></button>}</label>
                   <label className="date-filter"><CalendarDays size={16} /><span>To</span><input aria-label="Filter reports to date" type="date" value={dateToFilter} aria-invalid={hasInvalidDateRange} onChange={(event) => setDateToFilter(event.target.value)} />{dateToFilter && <button type="button" aria-label="Clear end date" onClick={() => setDateToFilter("")}><X size={14} /></button>}</label>
                   {hasInvalidDateRange && <p className="filter-validation" role="alert">Start date must be on or before end date.</p>}
@@ -1868,6 +2039,36 @@ function Workspace({ user, onLogout, onUserUpdated }) {
           </form>
         </section>
       </div>}
+      {isBulkTransferOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isBulkTransferringManpower) setIsBulkTransferOpen(false); }}>
+        <section className="upload-modal project-modal" role="dialog" aria-modal="true" aria-labelledby="bulk-project-transfer-title">
+          <div className="modal-heading">
+            <div>
+              <span className="modal-icon"><ArrowRightLeft size={19} /></span>
+              <div><h2 id="bulk-project-transfer-title">Transfer selected accounts</h2><p>{selectedManpowerPunchIds.length} manpower account{selectedManpowerPunchIds.length === 1 ? "" : "s"} selected</p></div>
+            </div>
+            <button className="icon-button" aria-label="Close bulk project transfer" disabled={isBulkTransferringManpower} onClick={() => setIsBulkTransferOpen(false)}><X size={19} /></button>
+          </div>
+          <form onSubmit={transferSelectedManpower}>
+            <label className="form-label">Destination project
+              <select autoFocus value={bulkTransferProjectId} onChange={(event) => { setBulkTransferProjectId(event.target.value); setBulkTransferError(""); }}>
+                <option value="">Unassigned</option>
+                {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+              </select>
+            </label>
+            <p className="field-hint">Only the Super User can change project assignments. Existing report history is unchanged.</p>
+            {bulkTransferError && <p className="field-error" role="alert">{bulkTransferError}</p>}
+            <div className="modal-footer">
+              <span><ShieldCheck size={15} /> Each selected account is updated individually</span>
+              <div>
+                <button type="button" className="button button-secondary" disabled={isBulkTransferringManpower} onClick={() => setIsBulkTransferOpen(false)}>Cancel</button>
+                <button type="submit" className="button button-primary" disabled={isBulkTransferringManpower || !selectedManpowerPunchIds.length}>
+                  <ArrowRightLeft size={16} /> {isBulkTransferringManpower ? "Transferring…" : "Transfer selected"}
+                </button>
+              </div>
+            </div>
+          </form>
+        </section>
+      </div>}
       {projectManagerPerson && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !assigningProjectManagerPunchId) setProjectManagerPerson(null); }}>
         <section className="upload-modal project-modal" role="dialog" aria-modal="true" aria-labelledby="project-manager-assignment-title">
           <div className="modal-heading">
@@ -2000,22 +2201,50 @@ function ProjectsPage({ projects: projectList, reports, onSelect, onCreate, onEd
       <div><div className="eyebrow"><span className="eyebrow-dot" /> WORKSPACE</div><h1>Your projects</h1><p>Choose a project to see its reports and updates.</p></div>
       {canManage && <button className="button button-primary" onClick={onCreate}><Plus size={17} /> New project</button>}
     </div>
-    <div className="project-cards">{projectList.map((project) => {
-      const count = Number(project.reportCount ?? reports.filter((report) => report.projectId === project.id).length);
-      return <article className="project-card" key={project.id}>
-        <button className="project-card-open" onClick={() => onSelect(project.id)} aria-label={`Open ${project.name} reports`}>
-          <span className={`project-card-icon card-${project.color}`}><FolderKanban size={20} /></span>
-          <strong>{project.name}</strong><span className="project-card-location">{project.description || "Construction project"}</span>
-          {project.managerName && <span className="project-card-manager">Project Manager: {project.managerName}</span>}
-          <span className="project-card-meta"><FileText size={15} /> {count} {count === 1 ? "report" : "reports"} <span className="project-card-status"><span className="trend-dot" /> Active</span></span>
-        </button>
-        {canExport && <button className="project-card-export" aria-label={`Export ${project.name} reports`} title="Export reports ZIP" onClick={() => onExport(project)}><ArrowDownToLine size={15} /></button>}
-        {canManage && <>
-          <button className="project-card-edit" aria-label={`Edit ${project.name}`} title="Edit project" onClick={() => onEdit(project)}><Pencil size={15} /></button>
-          <button className="project-card-delete" aria-label={`Delete ${project.name}`} title="Delete project" onClick={() => onDelete(project)}><Trash2 size={15} /></button>
-        </>}
-      </article>;
-    })}</div>
+    <div className="report-section project-list-section">
+      <div className="table-wrap">
+        <table className="project-list-table">
+          <thead><tr><th>PROJECT</th><th>DESCRIPTION</th><th>PROJECT MANAGER</th><th>REPORTS</th><th>STATUS</th><th><span className="sr-only">Actions</span></th></tr></thead>
+          <tbody>
+            {projectList.map((project) => {
+              const count = Number(project.reportCount ?? reports.filter((report) => report.projectId === project.id).length);
+              const openProject = () => onSelect(project.id);
+              return <tr
+                className="project-list-row"
+                key={project.id}
+                tabIndex={0}
+                aria-label={`Open ${project.name} reports`}
+                onClick={openProject}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    openProject();
+                  }
+                }}
+              >
+                <td><button type="button" className="project-list-name" onClick={(event) => { event.stopPropagation(); openProject(); }}>
+                  <span className={`project-list-icon card-${project.color}`}><FolderKanban size={16} /></span>
+                  {project.name}
+                </button></td>
+                <td><span className="project-list-description">{project.description || "Construction project"}</span></td>
+                <td>{project.managerName || <span className="project-manager-none">Unassigned</span>}</td>
+                <td><span className="project-list-count"><FileText size={14} /> {count} {count === 1 ? "report" : "reports"}</span></td>
+                <td><span className="project-list-status"><span className="trend-dot" /> Active</span></td>
+                <td><div className="report-actions project-list-actions">
+                  {canExport && <button type="button" className="download-button" aria-label={`Export ${project.name} reports`} title="Export reports ZIP" onClick={(event) => { event.stopPropagation(); onExport(project); }}><ArrowDownToLine size={15} /></button>}
+                  {canManage && <>
+                    <button type="button" className="download-button" aria-label={`Edit ${project.name}`} title="Edit project" onClick={(event) => { event.stopPropagation(); onEdit(project); }}><Pencil size={15} /></button>
+                    <button type="button" className="download-button delete-account-button" aria-label={`Delete ${project.name}`} title="Delete project" onClick={(event) => { event.stopPropagation(); onDelete(project); }}><Trash2 size={15} /></button>
+                  </>}
+                </div></td>
+              </tr>;
+            })}
+            {projectList.length === 0 && <tr><td className="empty-state" colSpan="6"><span className="empty-icon"><FolderKanban size={20} /></span><strong>No projects yet</strong><span>Create a project to start organizing reports.</span>{canManage && <button type="button" className="button button-secondary" onClick={onCreate}><Plus size={16} /> New project</button>}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
     <div className="projects-help"><ShieldCheck size={17} /><span>The Super User manages employee project assignments from the Manpower directory.</span></div>
   </section>;
 }
@@ -2024,14 +2253,22 @@ function ManpowerPage({
   people,
   total,
   query,
+  selectedPunchIds,
   canEditProjectAssignments,
   canDeleteAccounts,
   canTransferProjects,
+  isDeletingSelection,
+  isBulkTransferring,
   canAssignProjectManagers,
   updatingProjectManagerAccessPunchId,
   deletingManpowerPunchId,
   transferringManpowerPunchId,
   onSearch,
+  onToggleSelection,
+  onToggleVisibleSelection,
+  onClearSelection,
+  onBulkDelete,
+  onBulkTransfer,
   onAdd,
   onEdit,
   onToggleActive,
@@ -2041,6 +2278,10 @@ function ManpowerPage({
   onAssignProjectManager,
   onViewReports,
 }) {
+  const canSelectAccounts = canDeleteAccounts || canTransferProjects;
+  const selectedIds = new Set(selectedPunchIds);
+  const allVisibleSelected = people.length > 0 && people.every((person) => selectedIds.has(person.punchId));
+
   return <section className="manpower-page">
     <div className="page-heading">
       <div>
@@ -2061,11 +2302,32 @@ function ManpowerPage({
       <div className="filters">
         <label className="search-field manpower-search"><Search size={17} /><input aria-label="Search manpower" placeholder="Search by Punch ID, name, or designation..." value={query} onChange={(event) => onSearch(event.target.value)} /></label>
       </div>
+      {canSelectAccounts && <div className="manpower-selection-toolbar">
+        <span><strong>{selectedPunchIds.length}</strong> account{selectedPunchIds.length === 1 ? "" : "s"} selected</span>
+        <button type="button" className="button button-secondary" disabled={!people.length || isDeletingSelection || isBulkTransferring} onClick={() => onToggleVisibleSelection(people, !allVisibleSelected)}>
+          {allVisibleSelected ? "Deselect visible" : "Select visible"}
+        </button>
+        <button type="button" className="button button-secondary" disabled={!selectedPunchIds.length || isDeletingSelection || isBulkTransferring} onClick={onClearSelection}>Clear selection</button>
+        {canTransferProjects && <button type="button" className="button button-secondary" disabled={!selectedPunchIds.length || isDeletingSelection || isBulkTransferring || Boolean(transferringManpowerPunchId)} onClick={onBulkTransfer}>
+          <ArrowRightLeft size={15} />{isBulkTransferring ? "Transferring…" : "Transfer selected"}
+        </button>}
+        {canDeleteAccounts && <button type="button" className="button button-danger" disabled={!selectedPunchIds.length || isDeletingSelection || isBulkTransferring || Boolean(deletingManpowerPunchId)} onClick={onBulkDelete}>
+          <Trash2 size={15} />{isDeletingSelection ? "Deleting…" : "Delete selected"}
+        </button>}
+      </div>}
       <div className="table-wrap">
         <table className="manpower-table">
-          <thead><tr><th>PUNCH ID</th><th>EMPLOYEE NAME</th><th>DESIGNATION</th><th>ROLE</th><th>PROJECT</th><th>PROJECT MANAGER</th><th>ACCOUNT</th><th><span className="sr-only">Actions</span></th></tr></thead>
+          <thead><tr>{canSelectAccounts && <th><span className="sr-only">Select account</span></th>}<th>PUNCH ID</th><th>EMPLOYEE NAME</th><th>DESIGNATION</th><th>ROLE</th><th>PROJECT</th><th>PROJECT MANAGER</th><th>ACCOUNT</th><th><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
             {people.map((person) => <tr key={person.punchId}>
+              {canSelectAccounts && <td><input
+                type="checkbox"
+                className="manpower-selection-checkbox"
+                aria-label={`Select ${person.name}`}
+                checked={selectedIds.has(person.punchId)}
+                disabled={isDeletingSelection || isBulkTransferring}
+                onChange={(event) => onToggleSelection(person.punchId, event.target.checked)}
+              /></td>}
               <td><span className="punch-id">{person.punchId}</span></td>
               <td className="manpower-name">{person.name}</td>
               <td>{person.designation}</td>
@@ -2081,9 +2343,17 @@ function ManpowerPage({
               </td>
               <td>
                 <div className="project-manager-assignment-cell">
-                  {person.projectManagerProjects?.map((project) => <span className="project-manager-badge" key={project.id}>{project.name}</span>)}
-                  {canAssignProjectManagers && person.isProjectManager && person.active
-                    ? <button type="button" className="text-button project-manager-assign-button" aria-label={`${person.projectManagerProjects?.length ? "Add project for" : "Assign"} ${person.name}`} onClick={() => onAssignProjectManager(person)}>{person.projectManagerProjects?.length ? "Add project" : "Assign"}</button>
+                  {person.projectManagerProjects?.length ? <details className="project-manager-project-dropdown">
+                    <summary>
+                      {person.projectManagerProjects.length} assigned project{person.projectManagerProjects.length === 1 ? "" : "s"}
+                      <ChevronDown size={13} aria-hidden="true" />
+                    </summary>
+                    <div className="project-manager-project-options">
+                      {person.projectManagerProjects.map((project) => <span className="project-manager-badge" key={project.id}>{project.name}</span>)}
+                      {canAssignProjectManagers && person.isProjectManager && person.active && <button type="button" className="text-button project-manager-assign-button" aria-label={`Add project for ${person.name}`} onClick={() => onAssignProjectManager(person)}>Add project</button>}
+                    </div>
+                  </details> : canAssignProjectManagers && person.isProjectManager && person.active
+                    ? <button type="button" className="text-button project-manager-assign-button" aria-label={`Assign ${person.name}`} onClick={() => onAssignProjectManager(person)}>Assign</button>
                     : canAssignProjectManagers && person.active && !person.adminAccess
                       ? <button
                         type="button"
@@ -2107,7 +2377,7 @@ function ManpowerPage({
                   className="button button-secondary manpower-transfer-button"
                   aria-label={`Transfer ${person.name} to a project`}
                   title="Transfer to project"
-                  disabled={transferringManpowerPunchId !== null}
+                  disabled={transferringManpowerPunchId !== null || isDeletingSelection || isBulkTransferring}
                   onClick={() => onTransferPerson(person)}
                 ><ArrowRightLeft size={14} /> Transfer</button>}
                 {!person.adminAccess && <button className="download-button" aria-label={`Edit ${person.name}`} title="Edit account" onClick={() => onEdit(person)}><Pencil size={15} /></button>}
@@ -2116,12 +2386,12 @@ function ManpowerPage({
                   className="download-button delete-account-button"
                   aria-label={`Delete ${person.adminAccess ? "administrator" : "employee"} ${person.name}`}
                   title={`Delete ${person.adminAccess ? "administrator" : "employee"} account`}
-                  disabled={deletingManpowerPunchId !== null}
+                  disabled={deletingManpowerPunchId !== null || isDeletingSelection || isBulkTransferring}
                   onClick={() => onDeletePerson(person)}
                 ><Trash2 size={15} /></button>}
               </div></td>
             </tr>)}
-            {people.length === 0 && <tr><td className="empty-state" colSpan="8"><span className="empty-icon"><UsersRound size={20} /></span><strong>No manpower found</strong><span>Try a different search or add a manpower account.</span><button className="button button-secondary" onClick={onAdd}><Plus size={16} /> Add manpower</button></td></tr>}
+            {people.length === 0 && <tr><td className="empty-state" colSpan={8 + Number(canSelectAccounts)}><span className="empty-icon"><UsersRound size={20} /></span><strong>No manpower found</strong><span>Try a different search or add a manpower account.</span><button className="button button-secondary" onClick={onAdd}><Plus size={16} /> Add manpower</button></td></tr>}
           </tbody>
         </table>
       </div>

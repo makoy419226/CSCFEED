@@ -41,7 +41,7 @@ If either saved local role password is rejected, `npm run dev:local` offers an i
 - Add a report with a project, date, signed-in user, title, description, and multiple file attachments, with a confirmation before upload.
 - Preview attached images, PDFs, DOCX/CSV text, and XLSX/CSV tables in the browser; older DOC/XLS files can be downloaded.
 - Download a report package as a ZIP containing a PDF summary and all evidence attachments in an `evidence/` folder; individual attachments can also be downloaded separately.
-- Export a project ZIP containing a PDF summary and evidence files for every active report; Project Managers are restricted to their assigned projects.
+- Export a project ZIP containing a PDF summary and evidence files for every active report, or export all accessible projects in one ZIP organized into project folders; Project Managers are restricted to their assigned projects.
 - Store and stream uploaded files from server-local storage.
 - View project cards and report counts.
 
