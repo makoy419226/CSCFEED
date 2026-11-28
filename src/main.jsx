@@ -504,6 +504,10 @@ function Workspace({ user, onLogout, onUserUpdated }) {
   const [profileForm, setProfileForm] = useState({ displayName: user.name, currentPassword: "", newPassword: "", confirmPassword: "" });
   const [profileError, setProfileError] = useState("");
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [passwordDialog, setPasswordDialog] = useState(null);
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
+  const [passwordDialogError, setPasswordDialogError] = useState("");
+  const [isSavingManagedPassword, setIsSavingManagedPassword] = useState(false);
   const [form, setForm] = useState({ projectId: "", date: today, title: "", description: "" });
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [previewingUploadFile, setPreviewingUploadFile] = useState(null);
@@ -525,6 +529,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
   const isAdministrator = user.role === "admin" || user.role === "super_admin";
   const isSuperUser = user.role === "super_admin";
   const isProjectManager = !isAdministrator && user.role === "project_manager" && Boolean(user.projectManagerProjectIds?.length);
+  const canManageOwnPassword = ["employee", "project_manager"].includes(user.role);
   const canManageProjectReports = isAdministrator || isProjectManager;
   const projectColors = ["blue", "orange", "green", "purple"];
   const projectOptions = [
@@ -693,6 +698,61 @@ function Workspace({ user, onLogout, onUserUpdated }) {
       setProfileError(error instanceof Error ? error.message : "Unable to update administrator account.");
     } finally {
       setIsSavingProfile(false);
+    }
+  };
+
+  const openPasswordDialog = (person = null) => {
+    setIsProfileMenuOpen(false);
+    setPasswordDialog(person ? { kind: "managed", person } : { kind: "self" });
+    setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+    setPasswordDialogError("");
+  };
+
+  const closePasswordDialog = () => {
+    if (isSavingManagedPassword) return;
+    setPasswordDialog(null);
+    setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+    setPasswordDialogError("");
+  };
+
+  const submitPasswordDialog = async (event) => {
+    event.preventDefault();
+    if (!passwordDialog || isSavingManagedPassword) return;
+    const isSelf = passwordDialog.kind === "self";
+    if ((isSelf && !canManageOwnPassword) || (!isSelf && !isSuperUser)) return;
+    setPasswordDialogError("");
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordDialogError("New password and confirmation do not match.");
+      return;
+    }
+
+    setIsSavingManagedPassword(true);
+    try {
+      if (isSelf) {
+        await apiRequest("/api/auth/password", {
+          method: "PATCH",
+          body: {
+            currentPassword: passwordForm.currentPassword,
+            newPassword: passwordForm.newPassword,
+          },
+        });
+        setNotice("Your sign-in password has been updated. Other sessions were signed out.");
+      } else {
+        const { person } = passwordDialog;
+        await apiRequest(`/api/manpower/${encodeURIComponent(person.punchId)}/password`, {
+          method: "PATCH",
+          body: { newPassword: passwordForm.newPassword },
+        });
+        setManpower((items) => items.map((item) => item.punchId === person.punchId ? { ...item, passwordSet: true } : item));
+        setNotice(`${person.name}'s password was reset. Their existing sessions were signed out.`);
+      }
+      setPasswordDialog(null);
+      setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+      window.setTimeout(() => setNotice(""), 7000);
+    } catch (error) {
+      setPasswordDialogError(error instanceof Error ? error.message : "Unable to update this password.");
+    } finally {
+      setIsSavingManagedPassword(false);
     }
   };
 
@@ -1524,6 +1584,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
               </button>
               {isProfileMenuOpen && <div className="top-profile-dropdown" role="dialog" aria-label="Account options">
                 <div className="top-profile-summary"><strong>{currentUser}</strong><small>{isSuperUser ? "Super User" : isAdministrator ? "Appointed Admin" : user.role === "project_manager" ? "Project Manager" : `Punch ID ${user.punchId}`}</small></div>
+                {canManageOwnPassword && <button className="top-profile-action" type="button" onClick={() => openPasswordDialog()}><KeyRound size={16} /> Password &amp; security</button>}
                 {isSuperUser && <button className="top-profile-action" type="button" onClick={() => navigate("Settings")}><Settings size={16} /> Account settings</button>}
                 <button className="top-profile-logout" type="button" onClick={requestLogout}><LogOut size={16} /> Sign out</button>
               </div>}
@@ -1544,6 +1605,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
               canEditProjectAssignments={isSuperUser}
               canDeleteAccounts={isSuperUser}
               canTransferProjects={isSuperUser}
+              canManagePasswords={isSuperUser}
               isDeletingSelection={isDeletingManpowerSelection}
               isBulkTransferring={isBulkTransferringManpower}
               canAssignProjectManagers={isSuperUser}
@@ -1556,6 +1618,7 @@ function Workspace({ user, onLogout, onUserUpdated }) {
               onClearSelection={() => setSelectedManpowerPunchIds([])}
               onBulkDelete={deleteSelectedManpowerAccounts}
               onBulkTransfer={openBulkProjectTransfer}
+              onSetPassword={openPasswordDialog}
               onAdd={() => openManpowerForm()}
               onEdit={openManpowerForm}
               onToggleActive={toggleManpowerActive}
@@ -2069,6 +2132,70 @@ function Workspace({ user, onLogout, onUserUpdated }) {
           </form>
         </section>
       </div>}
+      {passwordDialog && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closePasswordDialog(); }}>
+        <section className="upload-modal project-modal" role="dialog" aria-modal="true" aria-labelledby="password-dialog-title">
+          <div className="modal-heading">
+            <div>
+              <span className="modal-icon"><KeyRound size={19} /></span>
+              <div>
+                <h2 id="password-dialog-title">{passwordDialog.kind === "self" ? "Manage sign-in password" : "Set or reset password"}</h2>
+                <p>{passwordDialog.kind === "self"
+                  ? `Your account · Punch ID ${user.punchId}`
+                  : `${passwordDialog.person.name} · Punch ID ${passwordDialog.person.punchId}`}</p>
+              </div>
+            </div>
+            <button type="button" className="icon-button" aria-label="Close password settings" disabled={isSavingManagedPassword} onClick={closePasswordDialog}><X size={19} /></button>
+          </div>
+          <form onSubmit={submitPasswordDialog}>
+            {passwordDialog.kind === "self" && <label className="form-label">Current password <span className="optional">(required if one is already set)</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                autoFocus
+                maxLength="72"
+                value={passwordForm.currentPassword}
+                onChange={(event) => setPasswordForm({ ...passwordForm, currentPassword: event.target.value })}
+              />
+            </label>}
+            <label className="form-label">New password <span className="required">*</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                autoFocus={passwordDialog.kind !== "self"}
+                minLength="12"
+                maxLength="72"
+                required
+                value={passwordForm.newPassword}
+                onChange={(event) => setPasswordForm({ ...passwordForm, newPassword: event.target.value })}
+              />
+              <span className="field-hint">Use 12 to 72 characters. This password is required at your next sign-in.</span>
+            </label>
+            <label className="form-label">Confirm new password <span className="required">*</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                minLength="12"
+                maxLength="72"
+                required
+                value={passwordForm.confirmPassword}
+                onChange={(event) => setPasswordForm({ ...passwordForm, confirmPassword: event.target.value })}
+              />
+            </label>
+            {passwordDialogError && <p className="field-error" role="alert">{passwordDialogError}</p>}
+            <div className="modal-footer">
+              <span><ShieldCheck size={15} />{passwordDialog.kind === "self"
+                ? "Other sessions are signed out after a change"
+                : "This action signs the user out of existing sessions"}</span>
+              <div>
+                <button type="button" className="button button-secondary" disabled={isSavingManagedPassword} onClick={closePasswordDialog}>Cancel</button>
+                <button type="submit" className="button button-primary" disabled={isSavingManagedPassword}>
+                  <Check size={16} />{isSavingManagedPassword ? "Saving…" : "Save password"}
+                </button>
+              </div>
+            </div>
+          </form>
+        </section>
+      </div>}
       {projectManagerPerson && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !assigningProjectManagerPunchId) setProjectManagerPerson(null); }}>
         <section className="upload-modal project-modal" role="dialog" aria-modal="true" aria-labelledby="project-manager-assignment-title">
           <div className="modal-heading">
@@ -2257,6 +2384,7 @@ function ManpowerPage({
   canEditProjectAssignments,
   canDeleteAccounts,
   canTransferProjects,
+  canManagePasswords,
   isDeletingSelection,
   isBulkTransferring,
   canAssignProjectManagers,
@@ -2274,6 +2402,7 @@ function ManpowerPage({
   onToggleActive,
   onToggleProjectManagerAccess,
   onDeletePerson,
+  onSetPassword,
   onTransferPerson,
   onAssignProjectManager,
   onViewReports,
@@ -2317,7 +2446,7 @@ function ManpowerPage({
       </div>}
       <div className="table-wrap">
         <table className="manpower-table">
-          <thead><tr>{canSelectAccounts && <th><span className="sr-only">Select account</span></th>}<th>PUNCH ID</th><th>EMPLOYEE NAME</th><th>DESIGNATION</th><th>ROLE</th><th>PROJECT</th><th>PROJECT MANAGER</th><th>ACCOUNT</th><th><span className="sr-only">Actions</span></th></tr></thead>
+          <thead><tr>{canSelectAccounts && <th><span className="sr-only">Select account</span></th>}<th>PUNCH ID</th><th>EMPLOYEE NAME</th><th>DESIGNATION</th><th>ROLE</th><th>PROJECT</th><th>PROJECT MANAGER</th>{canManagePasswords && <th>PASSWORD</th>}<th>ACCOUNT</th><th><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>
             {people.map((person) => <tr key={person.punchId}>
               {canSelectAccounts && <td><input
@@ -2365,6 +2494,10 @@ function ManpowerPage({
                       : <span className="project-manager-none">—</span>}
                 </div>
               </td>
+              {canManagePasswords && <td><div className="report-actions">
+                {person.adminAccess ? <span className="directory-status directory-status-static">Punch ID only</span> : <span className={`directory-status directory-status-static ${person.passwordSet ? "" : "directory-status-inactive"}`}><span />{person.passwordSet ? "Set" : "Not set"}</span>}
+                {!person.adminAccess && <button type="button" className="download-button" aria-label={`${person.passwordSet ? "Reset" : "Set"} password for ${person.name}`} title={`${person.passwordSet ? "Reset" : "Set"} password`} onClick={() => onSetPassword(person)}><KeyRound size={15} /></button>}
+              </div></td>}
               <td>
                 {person.adminAccess || (person.isProjectManager && !canEditProjectAssignments)
                   ? <span className={`directory-status directory-status-static ${person.active ? "" : "directory-status-inactive"}`}><span />{person.active ? "Active" : "Inactive"}</span>
@@ -2391,7 +2524,7 @@ function ManpowerPage({
                 ><Trash2 size={15} /></button>}
               </div></td>
             </tr>)}
-            {people.length === 0 && <tr><td className="empty-state" colSpan={8 + Number(canSelectAccounts)}><span className="empty-icon"><UsersRound size={20} /></span><strong>No manpower found</strong><span>Try a different search or add a manpower account.</span><button className="button button-secondary" onClick={onAdd}><Plus size={16} /> Add manpower</button></td></tr>}
+            {people.length === 0 && <tr><td className="empty-state" colSpan={8 + Number(canSelectAccounts) + Number(canManagePasswords)}><span className="empty-icon"><UsersRound size={20} /></span><strong>No manpower found</strong><span>Try a different search or add a manpower account.</span><button className="button button-secondary" onClick={onAdd}><Plus size={16} /> Add manpower</button></td></tr>}
           </tbody>
         </table>
       </div>

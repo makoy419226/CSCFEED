@@ -1,4 +1,6 @@
 import express from "express";
+import bcrypt from "bcryptjs";
+import rateLimit from "express-rate-limit";
 import { and, eq, inArray, ne, or } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { accounts, authCredentials, authSessions, projects, reports } from "../../src/db/schema.js";
@@ -7,6 +9,7 @@ import { requireAdmin, requireIdentity, requireSuperUser, superUserRole } from "
 import {
   manpowerAdminAccessSchema,
   manpowerActiveSchema,
+  manpowerPasswordSchema,
   manpowerProjectManagerAccessSchema,
   manpowerSchema,
   projectManagerAssignmentSchema,
@@ -18,6 +21,12 @@ import { validate } from "../validation.js";
 
 const assignedProjects = alias(projects, "assigned_projects");
 const managerProjects = alias(projects, "manager_projects");
+const passwordManagementLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 function toPerson(account) {
   return {
@@ -27,6 +36,7 @@ function toPerson(account) {
     active: account.active,
     adminAccess: account.accountRole === "admin",
     isProjectManager: account.accountRole === "project_manager",
+    passwordSet: Boolean(account.passwordSet),
     projectId: account.projectId ? String(account.projectId) : null,
     projectName: account.projectName || null,
     projectManagerProjects: (account.projectManagerProjects || []).map((project) => ({
@@ -48,10 +58,12 @@ export function createManpowerRouter({ db }) {
       designation: accounts.designation,
       active: accounts.active,
       accountRole: accounts.accountRole,
+      passwordSet: authCredentials.passwordHash,
       projectId: accounts.projectId,
       projectName: assignedProjects.name,
     })
       .from(accounts)
+      .leftJoin(authCredentials, eq(authCredentials.accountId, accounts.id))
       .leftJoin(assignedProjects, eq(assignedProjects.id, accounts.projectId))
       .where(and(inArray(accounts.accountRole, ["employee", "admin", "project_manager"]), ne(accounts.punchId, "0000")))
       .orderBy(accounts.fullName);
@@ -78,6 +90,35 @@ export function createManpowerRouter({ db }) {
         projectManagerProjects: assignmentsByAccount.get(person.id) || [],
       })),
     });
+  }));
+
+  router.patch("/:punchId/password", requireSuperUser, passwordManagementLimiter, validate(punchIdParamsSchema, "params"), validate(manpowerPasswordSchema), asyncRoute(async (req, res) => {
+    const result = await db.transaction(async (tx) => {
+      const [target] = await tx.select({
+        id: accounts.id,
+        punchId: accounts.punchId,
+        accountRole: accounts.accountRole,
+      })
+        .from(accounts)
+        .where(eq(accounts.punchId, req.validated.params.punchId))
+        .for("update");
+
+      if (!target || !["employee", "project_manager"].includes(target.accountRole)) {
+        throw new HttpError(404, "Employee or Project Manager account not found.");
+      }
+
+      const passwordHash = await bcrypt.hash(req.validated.body.newPassword, 12);
+      await tx.insert(authCredentials)
+        .values({ accountId: target.id, username: target.punchId, passwordHash })
+        .onConflictDoUpdate({
+          target: authCredentials.accountId,
+          set: { username: target.punchId, passwordHash },
+        });
+      await tx.delete(authSessions).where(eq(authSessions.accountId, target.id));
+      return { punchId: target.punchId };
+    });
+
+    return res.json({ success: true, data: { ...result, passwordSet: true } });
   }));
 
   router.patch("/:punchId/project", requireSuperUser, validate(punchIdParamsSchema, "params"), validate(projectMembershipSchema), asyncRoute(async (req, res) => {

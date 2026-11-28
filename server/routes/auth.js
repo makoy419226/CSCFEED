@@ -13,7 +13,7 @@ import {
   setSessionCookie,
 } from "../session-cookie.js";
 import { validate } from "../validation.js";
-import { adminProfileUpdateSchema, loginSchema } from "../schemas.js";
+import { adminProfileUpdateSchema, loginSchema, ownPasswordUpdateSchema } from "../schemas.js";
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -81,8 +81,10 @@ export function createAuthRouter({ db, ready, startupError = () => null }) {
         fullName: accounts.fullName,
         role: accounts.accountRole,
         punchId: accounts.punchId,
+        passwordHash: authCredentials.passwordHash,
       })
         .from(accounts)
+        .leftJoin(authCredentials, eq(authCredentials.accountId, accounts.id))
         .where(and(
           eq(accounts.punchId, credentials.employeeId),
           eq(accounts.active, true),
@@ -91,6 +93,14 @@ export function createAuthRouter({ db, ready, startupError = () => null }) {
 
       if (!record || !["employee", "admin", "project_manager"].includes(record.role)) {
         throw new HttpError(401, "No active employee account matches that Punch ID.");
+      }
+      const passwordApplies = ["employee", "project_manager"].includes(record.role);
+      if (passwordApplies && record.passwordHash) {
+        if (!credentials.password || !(await bcrypt.compare(credentials.password, record.passwordHash))) {
+          throw new HttpError(401, "Invalid Punch ID or password.");
+        }
+      } else if (credentials.password) {
+        throw new HttpError(401, "Invalid Punch ID or password.");
       }
       account = record;
     }
@@ -127,6 +137,49 @@ export function createAuthRouter({ db, ready, startupError = () => null }) {
     }
     clearSessionCookie(res);
     return res.json({ success: true });
+  }));
+
+  router.patch("/password", profileUpdateLimiter, requireIdentity(db), validate(ownPasswordUpdateSchema), asyncRoute(async (req, res) => {
+    const { currentPassword, newPassword } = req.validated.body;
+    const currentTokenHash = createTokenHash(readSessionToken(req));
+
+    await db.transaction(async (tx) => {
+      const [account] = await tx.select({
+        id: accounts.id,
+        punchId: accounts.punchId,
+        accountRole: accounts.accountRole,
+        active: accounts.active,
+      })
+        .from(accounts)
+        .where(eq(accounts.id, req.identity.id))
+        .for("update");
+
+      if (!account || !account.active || !["employee", "project_manager"].includes(account.accountRole)) {
+        throw new HttpError(403, "Password management is available to active employees and Project Managers.");
+      }
+
+      const [credential] = await tx.select({ passwordHash: authCredentials.passwordHash })
+        .from(authCredentials)
+        .where(eq(authCredentials.accountId, account.id))
+        .limit(1);
+      if (credential && (!currentPassword || !(await bcrypt.compare(currentPassword, credential.passwordHash)))) {
+        throw new HttpError(401, "Current password is incorrect.");
+      }
+
+      const passwordHash = await bcrypt.hash(newPassword, 12);
+      await tx.insert(authCredentials)
+        .values({ accountId: account.id, username: account.punchId, passwordHash })
+        .onConflictDoUpdate({
+          target: authCredentials.accountId,
+          set: { username: account.punchId, passwordHash },
+        });
+      await tx.delete(authSessions).where(and(
+        eq(authSessions.accountId, account.id),
+        ne(authSessions.tokenHash, currentTokenHash),
+      ));
+    });
+
+    return res.json({ success: true, data: { passwordSet: true } });
   }));
 
   router.patch("/profile", profileUpdateLimiter, requireIdentity(db), requireSuperUser, validate(adminProfileUpdateSchema), asyncRoute(async (req, res) => {

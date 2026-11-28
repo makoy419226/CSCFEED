@@ -42,7 +42,7 @@ export default function Login({ onLogin, serviceMessage = "" }) {
         credentials: "include",
         body: JSON.stringify(
           mode === "employee"
-            ? { employeeId }
+            ? { employeeId, ...(password ? { password } : {}) }
             : { username, password },
         ),
       });
@@ -147,6 +147,33 @@ export default function Login({ onLogin, serviceMessage = "" }) {
                 />
               </span>
               <small>Only active employee accounts can sign in.</small>
+            </label>
+            <label className="login-label" htmlFor="login-employee-password">
+              Password <span className="optional">(if you have set one)</span>
+              <span className="login-input-wrap">
+                <KeyRound size={17} aria-hidden="true" />
+                <input
+                  id="login-employee-password"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="current-password"
+                  placeholder="Leave blank if you have not set one"
+                  value={password}
+                  onChange={(event) => {
+                    setPassword(event.target.value);
+                    setError("");
+                  }}
+                />
+                <button
+                  className="login-password-toggle"
+                  type="button"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
+                  onClick={() => setShowPassword((visible) => !visible)}
+                >
+                  {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                </button>
+              </span>
+              <small>Appointed Admin accounts continue to use Punch ID only.</small>
             </label>
           ) : (
             <>

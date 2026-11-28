@@ -16,19 +16,34 @@ export const loginSchema = z.union([
     password: z.string().min(1).max(72)
       .refine((value) => Buffer.byteLength(value, "utf8") <= 72, "Password is too long."),
   }).strict(),
-  z.object({ employeeId: punchId }).strict(),
+  z.object({
+    employeeId: punchId,
+    password: z.string().min(1).max(72)
+      .refine((value) => Buffer.byteLength(value, "utf8") <= 72, "Password is too long.")
+      .optional(),
+  }).strict(),
 ]);
 
 const passwordSchema = z.string().min(1).max(72)
   .refine((value) => Buffer.byteLength(value, "utf8") <= 72, "Password is too long.");
+const newPasswordSchema = z.string().min(12).max(72)
+  .refine((value) => Buffer.byteLength(value, "utf8") <= 72, "Password is too long.");
+
+export const ownPasswordUpdateSchema = z.object({
+  currentPassword: z.union([z.literal(""), passwordSchema]).optional(),
+  newPassword: newPasswordSchema,
+}).strict();
+
+export const manpowerPasswordSchema = z.object({
+  newPassword: newPasswordSchema,
+}).strict();
 
 export const adminProfileUpdateSchema = z.object({
   displayName: z.string().trim().min(2).max(160),
   currentPassword: passwordSchema,
   newPassword: z.union([
     z.literal(""),
-    z.string().min(12).max(72)
-      .refine((value) => Buffer.byteLength(value, "utf8") <= 72, "Password is too long."),
+    newPasswordSchema,
   ]).optional(),
 }).strict();
 
